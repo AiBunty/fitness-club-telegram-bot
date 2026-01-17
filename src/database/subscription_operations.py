@@ -241,18 +241,8 @@ def get_user_subscription(user_id: int) -> dict:
         )
         
         if row:
-            return {
-                "id": row[0],
-                "user_id": row[1],
-                "plan_id": row[2],
-                "amount": row[3],
-                "start_date": row[4],
-                "end_date": row[5],
-                "status": row[6],
-                "grace_period_end": row[7],
-                "created_at": row[8],
-                "updated_at": row[9],
-            }
+            # Row is already a dict from RealDictCursor
+            return row
     except Exception as e:
         logger.error(f"Error fetching subscription: {e}")
     
