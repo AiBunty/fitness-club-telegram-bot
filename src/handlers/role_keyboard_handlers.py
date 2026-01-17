@@ -42,7 +42,6 @@ STAFF_MENU = InlineKeyboardMarkup([
 ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("📈 Dashboard", callback_data="cmd_admin_dashboard")],
     [InlineKeyboardButton("📊 Reports & Analytics", callback_data="cmd_reports_menu")],
-    [InlineKeyboardButton("💳 Pending Payment Requests", callback_data="cmd_pending_requests")],
     [InlineKeyboardButton("🥤 Pending Shake Purchases", callback_data="cmd_pending_shake_purchases")],
     [InlineKeyboardButton("📢 Broadcast", callback_data="cmd_broadcast")],
     [InlineKeyboardButton("🤖 Follow-up Settings", callback_data="cmd_followup_settings")],

@@ -430,8 +430,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_broadcast(update, context)
     elif query.data == "cmd_followup_settings":
         await cmd_followup_settings(update, context)
-    elif query.data == "cmd_pending_requests":
-        await cmd_pending_requests(update, context)
     elif query.data.startswith("confirm_buy_"):
         # Confirm shake credit purchase
         credits = int(query.data.split("_")[-1])
