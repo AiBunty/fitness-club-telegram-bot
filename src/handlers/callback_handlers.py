@@ -338,7 +338,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     query = update.callback_query
     logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id}")
-    await query.answer()
+    
+    # Try to answer callback, but handle old/expired queries gracefully
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.debug(f"Could not answer callback query (likely expired): {e}")
+        # Continue processing even if answer fails - query might be too old
     
     # Habit callbacks (habit toggling and submission)
     if query.data.startswith("habit_toggle_") or query.data == "habit_submit":
