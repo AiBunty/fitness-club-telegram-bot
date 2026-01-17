@@ -1,0 +1,387 @@
+"""
+Shake Credit Operations
+Handles all shake credit transactions, purchases, and consumption
+"""
+
+import logging
+from datetime import datetime, date
+from src.database.connection import execute_query
+
+logger = logging.getLogger(__name__)
+
+# Shake credit pricing: Rs 6000 for 25 credits
+CREDIT_COST = 6000
+CREDITS_PER_PURCHASE = 25
+COST_PER_CREDIT = CREDIT_COST / CREDITS_PER_PURCHASE  # Rs 240 per credit
+
+
+def init_user_credits(user_id: int):
+    """Initialize shake credits for new user"""
+    try:
+        query = """
+            INSERT INTO shake_credits (user_id, total_credits, used_credits, available_credits)
+            VALUES (%s, 0, 0, 0)
+            ON CONFLICT (user_id) DO NOTHING
+        """
+        execute_query(query, (user_id,))
+        logger.info(f"Shake credits initialized for user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize credits for user {user_id}: {e}")
+        return False
+
+
+def get_user_credits(user_id: int) -> dict:
+    """Get user's current shake credits balance"""
+    try:
+        query = """
+            SELECT user_id, total_credits, used_credits, available_credits, last_updated
+            FROM shake_credits
+            WHERE user_id = %s
+        """
+        result = execute_query(query, (user_id,), fetch_one=True)
+        
+        if result:
+            return {
+                'user_id': result['user_id'],
+                'total_credits': result['total_credits'],
+                'used_credits': result['used_credits'],
+                'available_credits': result['available_credits'],
+                'last_updated': result['last_updated']
+            }
+        else:
+            # Initialize if doesn't exist
+            init_user_credits(user_id)
+            return {
+                'user_id': user_id,
+                'total_credits': 0,
+                'used_credits': 0,
+                'available_credits': 0,
+                'last_updated': datetime.now()
+            }
+    except Exception as e:
+        logger.error(f"Failed to get credits for user {user_id}: {e}")
+        return None
+
+
+def add_credits(user_id: int, credits: int, transaction_type: str, description: str = None) -> bool:
+    """
+    Add shake credits to user account
+    
+    Args:
+        user_id: User's Telegram ID
+        credits: Number of credits to add
+        transaction_type: 'purchase', 'referral', 'admin_gift'
+        description: Optional description
+    """
+    try:
+        # Update credits
+        query1 = """
+            UPDATE shake_credits 
+            SET total_credits = total_credits + %s,
+                available_credits = available_credits + %s,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            RETURNING total_credits, available_credits
+        """
+        result = execute_query(query1, (credits, credits, user_id), fetch_one=True)
+        
+        if result:
+            # Log transaction
+            query2 = """
+                INSERT INTO shake_transactions 
+                (user_id, credit_change, transaction_type, description, created_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """
+            execute_query(query2, (user_id, credits, transaction_type, description or f"{transaction_type}: +{credits} credits"))
+            
+            logger.info(f"Added {credits} credits to user {user_id}. Total: {result['total_credits']}, Available: {result['available_credits']}")
+            return True
+        else:
+            logger.warning(f"User {user_id} credits record not found")
+            init_user_credits(user_id)
+            return add_credits(user_id, credits, transaction_type, description)
+    except Exception as e:
+        logger.error(f"Failed to add credits for user {user_id}: {e}")
+        return False
+
+
+def consume_credit(user_id: int, reason: str = "Shake consumed") -> bool:
+    """Deduct 1 shake credit (when shake is consumed)"""
+    try:
+        # Check if user has available credits
+        query_check = """
+            SELECT available_credits FROM shake_credits WHERE user_id = %s
+        """
+        result = execute_query(query_check, (user_id,), fetch_one=True)
+        
+        if not result or result['available_credits'] <= 0:
+            logger.warning(f"User {user_id} has no available credits")
+            return False
+        
+        # Deduct credit
+        query_deduct = """
+            UPDATE shake_credits 
+            SET used_credits = used_credits + 1,
+                available_credits = available_credits - 1,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            RETURNING used_credits, available_credits
+        """
+        update_result = execute_query(query_deduct, (user_id,), fetch_one=True)
+        
+        if update_result:
+            # Log transaction
+            query_log = """
+                INSERT INTO shake_transactions 
+                (user_id, credit_change, transaction_type, description, created_at)
+                VALUES (%s, -1, 'consume', %s, CURRENT_TIMESTAMP)
+            """
+            execute_query(query_log, (user_id, reason))
+            
+            logger.info(f"Deducted 1 credit from user {user_id}. Used: {update_result['used_credits']}, Available: {update_result['available_credits']}")
+            return True
+        
+        return False
+    except Exception as e:
+        logger.error(f"Failed to consume credit for user {user_id}: {e}")
+        return False
+
+
+def consume_credit_with_date(user_id: int, consumption_date: date, reason: str = "Manual admin deduction") -> bool:
+    """
+    Deduct 1 shake credit with specific consumption date
+    Used when admin manually logs shake consumption without credit
+    """
+    try:
+        # Check if user has available credits
+        query_check = """
+            SELECT available_credits FROM shake_credits WHERE user_id = %s
+        """
+        result = execute_query(query_check, (user_id,), fetch_one=True)
+        
+        if not result or result['available_credits'] <= 0:
+            logger.warning(f"User {user_id} has no available credits")
+            return False
+        
+        # Deduct credit
+        query_deduct = """
+            UPDATE shake_credits 
+            SET used_credits = used_credits + 1,
+                available_credits = available_credits - 1,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            RETURNING used_credits, available_credits
+        """
+        update_result = execute_query(query_deduct, (user_id,), fetch_one=True)
+        
+        if update_result:
+            # Log transaction with specific date
+            query_log = """
+                INSERT INTO shake_transactions 
+                (user_id, credit_change, transaction_type, description, reference_date, created_at)
+                VALUES (%s, -1, 'admin_deduction', %s, %s, CURRENT_TIMESTAMP)
+            """
+            execute_query(query_log, (user_id, reason, consumption_date))
+            
+            logger.info(f"Admin deducted 1 credit from user {user_id} for date {consumption_date}")
+            return True
+        
+        return False
+    except Exception as e:
+        logger.error(f"Failed to consume credit with date for user {user_id}: {e}")
+        return False
+
+
+def create_purchase_request(user_id: int, credits: int) -> dict:
+    """
+    Create a shake credit purchase request
+    Admin must approve before credits are transferred
+    
+    Args:
+        user_id: User's Telegram ID
+        credits: Number of credits to purchase (default 25)
+    
+    Returns:
+        Purchase request record with ID and status
+    """
+    try:
+        amount = credits * COST_PER_CREDIT
+        
+        query = """
+            INSERT INTO shake_purchases 
+            (user_id, credits_requested, amount, status)
+            VALUES (%s, %s, %s, 'pending')
+            RETURNING purchase_id, user_id, credits_requested, amount, status, created_at
+        """
+        result = execute_query(query, (user_id, credits, amount), fetch_one=True)
+        
+        if result:
+            logger.info(f"Purchase request created for user {user_id}: {credits} credits (Rs {amount})")
+            return result
+        
+        return None
+    except Exception as e:
+        logger.error(f"Failed to create purchase request for user {user_id}: {e}")
+        return None
+
+
+def get_pending_purchase_requests(limit: int = 20) -> list:
+    """Get all pending shake credit purchase requests"""
+    try:
+        query = """
+            SELECT sp.purchase_id, sp.user_id, u.full_name, u.telegram_username,
+                   sp.credits_requested, sp.amount, sp.status, sp.created_at
+            FROM shake_purchases sp
+            JOIN users u ON sp.user_id = u.user_id
+            WHERE sp.status = 'pending'
+            ORDER BY sp.created_at ASC
+            LIMIT %s
+        """
+        results = execute_query(query, (limit,))
+        return results if results else []
+    except Exception as e:
+        logger.error(f"Failed to get pending purchase requests: {e}")
+        return []
+
+
+def approve_purchase(purchase_id: int, admin_user_id: int) -> dict:
+    """
+    Approve a shake credit purchase request
+    This transfers the credits to user's account
+    
+    Args:
+        purchase_id: Purchase request ID
+        admin_user_id: Admin who approved
+    
+    Returns:
+        Updated purchase record with user info
+    """
+    try:
+        # Get purchase details
+        query_get = """
+            SELECT purchase_id, user_id, credits_requested, amount, status
+            FROM shake_purchases
+            WHERE purchase_id = %s
+        """
+        purchase = execute_query(query_get, (purchase_id,), fetch_one=True)
+        
+        if not purchase:
+            logger.warning(f"Purchase {purchase_id} not found")
+            return None
+
+        if purchase['status'] != 'pending':
+            purchase['already_processed'] = True
+            logger.info(f"Purchase {purchase_id} already {purchase['status']}")
+            return purchase
+        
+        user_id = purchase['user_id']
+        credits = purchase['credits_requested']
+        
+        # Update purchase status
+        query_update = """
+            UPDATE shake_purchases
+            SET status = 'approved', approved_by = %s, approved_at = CURRENT_TIMESTAMP
+            WHERE purchase_id = %s
+            RETURNING purchase_id, user_id, credits_requested, status, approved_at
+        """
+        execute_query(query_update, (admin_user_id, purchase_id))
+        
+        # Add credits to user
+        add_credits(user_id, credits, 'purchase', f"Purchased {credits} credits for Rs {purchase['amount']}")
+        
+        logger.info(f"Purchase {purchase_id} approved by admin {admin_user_id}. {credits} credits transferred to user {user_id}")
+        
+        # Get updated record
+        query_final = """
+            SELECT sp.purchase_id, sp.user_id, u.full_name, sp.credits_requested, 
+                   sp.amount, sp.status, sp.approved_at
+            FROM shake_purchases sp
+            JOIN users u ON sp.user_id = u.user_id
+            WHERE sp.purchase_id = %s
+        """
+        return execute_query(query_final, (purchase_id,), fetch_one=True)
+    except Exception as e:
+        logger.error(f"Failed to approve purchase {purchase_id}: {e}")
+        return None
+
+
+def reject_purchase(purchase_id: int, admin_user_id: int, reason: str = "") -> bool:
+    """Reject a shake credit purchase request"""
+    try:
+        purchase = execute_query(
+            "SELECT status FROM shake_purchases WHERE purchase_id = %s",
+            (purchase_id,),
+            fetch_one=True,
+        )
+
+        if not purchase:
+            logger.warning(f"Purchase {purchase_id} not found for rejection")
+            return None
+
+        if purchase['status'] != 'pending':
+            purchase['already_processed'] = True
+            return purchase
+
+        query = """
+            UPDATE shake_purchases
+            SET status = 'rejected', approved_by = %s, approved_at = CURRENT_TIMESTAMP
+            WHERE purchase_id = %s AND status = 'pending'
+            RETURNING purchase_id, status
+        """
+        result = execute_query(query, (admin_user_id, purchase_id), fetch_one=True)
+        if result:
+            result['already_processed'] = False
+            logger.info(f"Purchase {purchase_id} rejected by admin {admin_user_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to reject purchase {purchase_id}: {e}")
+        return False
+
+
+def get_shake_report(user_id: int) -> dict:
+    """
+    Get detailed shake credit report for user
+    Shows: Total credits purchased, consumption history, current balance
+    """
+    try:
+        # Get current balance
+        balance = get_user_credits(user_id)
+        
+        # Get all transactions
+        query = """
+            SELECT transaction_id, credit_change, transaction_type, description, 
+                   reference_date, created_at
+            FROM shake_transactions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """
+        transactions = execute_query(query, (user_id,))
+        
+        return {
+            'user_id': user_id,
+            'current_balance': balance,
+            'transactions': transactions if transactions else []
+        }
+    except Exception as e:
+        logger.error(f"Failed to get shake report for user {user_id}: {e}")
+        return None
+
+
+def get_all_user_reports() -> list:
+    """Get shake credit summary for all users"""
+    try:
+        query = """
+            SELECT sc.user_id, u.full_name, u.telegram_username,
+                   sc.total_credits, sc.used_credits, sc.available_credits,
+                   sc.last_updated
+            FROM shake_credits sc
+            JOIN users u ON sc.user_id = u.user_id
+            WHERE sc.total_credits > 0
+            ORDER BY sc.available_credits DESC
+        """
+        results = execute_query(query)
+        return results if results else []
+    except Exception as e:
+        logger.error(f"Failed to get all user reports: {e}")
+        return []
