@@ -9,8 +9,7 @@ logger = logging.getLogger(__name__)
 
 # User menu: logging & progress
 USER_MENU = InlineKeyboardMarkup([
-    [InlineKeyboardButton("💳 Request Payment Approval", callback_data="cmd_request_payment")],
-    [InlineKeyboardButton("📊 Notifications", callback_data="cmd_notifications")],
+    [InlineKeyboardButton(" Notifications", callback_data="cmd_notifications")],
     [InlineKeyboardButton("🏆 Challenges", callback_data="cmd_challenges")],
     [InlineKeyboardButton("⚖️ Log Weight", callback_data="cmd_weight")],
     [InlineKeyboardButton("💧 Log Water", callback_data="cmd_water")],

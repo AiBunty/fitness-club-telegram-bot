@@ -147,7 +147,6 @@ def _get_commands_for_role(role: str) -> list:
         BotCommand("payment_status", "Payment status"),
         BotCommand("subscribe", "Subscribe to gym membership"),
         BotCommand("my_subscription", "View subscription status"),
-        BotCommand("request_payment", "Request payment approval"),
     ]
     
     # Staff commands - staff-specific management

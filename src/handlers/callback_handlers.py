@@ -325,7 +325,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     from src.handlers.analytics_handlers import cmd_admin_dashboard
     from src.handlers.notification_handlers import cmd_notifications
     from src.handlers.broadcast_handlers import cmd_broadcast, cmd_followup_settings
-    from src.handlers.payment_request_handlers import cmd_request_payment, cmd_pending_requests
+    from src.handlers.payment_request_handlers import cmd_pending_requests
     from src.handlers.shake_credit_handlers import (
         cmd_buy_shake_credits, cmd_check_shake_credits, cmd_shake_report,
         cmd_admin_pending_purchases, process_shake_order
@@ -430,8 +430,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_broadcast(update, context)
     elif query.data == "cmd_followup_settings":
         await cmd_followup_settings(update, context)
-    elif query.data == "cmd_request_payment":
-        await cmd_request_payment(update, context)
     elif query.data == "cmd_pending_requests":
         await cmd_pending_requests(update, context)
     elif query.data.startswith("confirm_buy_"):
