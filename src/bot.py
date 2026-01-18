@@ -38,17 +38,21 @@ from src.handlers.admin_handlers import (
     callback_ready_shake, callback_cancel_shake,
     cmd_add_staff, cmd_remove_staff, cmd_list_staff, handle_staff_id_input,
     cmd_add_admin, cmd_remove_admin, cmd_list_admins,
-    callback_approve_user, callback_reject_user, cmd_pending_users
+    callback_approve_user, callback_reject_user, cmd_pending_users,
+    cmd_manual_shake_deduction, get_manual_shake_deduction_handler
 )
 from src.handlers.analytics_handlers import (
-    cmd_admin_dashboard, handle_analytics_callback
+    cmd_admin_dashboard, handle_analytics_callback,
+    callback_revenue_stats, callback_member_stats, 
+    callback_engagement_stats, callback_challenge_stats,
+    callback_top_activities, callback_admin_dashboard
 )
 from src.handlers.admin_dashboard_handlers import (
     cmd_admin_panel, cmd_member_list, cmd_manage_users, cmd_export_excel,
     callback_back_to_admin_panel, get_manage_users_conversation_handler
 )
 from src.handlers.payment_handlers import (
-    cmd_payment_status, cmd_challenges, callback_pay_fee,
+    cmd_challenges, callback_pay_fee,
     get_payment_amount, get_payment_method, confirm_payment,
     callback_join_challenge, callback_challenge_leaderboard,
     callback_close, cancel_payment, PAYMENT_AMOUNT, PAYMENT_METHOD, 
@@ -63,12 +67,20 @@ from src.handlers.challenge_handlers import (
     cmd_challenges, cmd_my_challenges, callback_challenge_view,
     callback_challenge_join, callback_challenge_progress, 
     callback_challenge_leaderboard, callback_challenge_back, 
-    callback_challenge_close
+    callback_challenge_close, register_challenge_callbacks
+)
+from src.handlers.admin_challenge_handlers import (
+    cmd_admin_challenges, callback_create_challenge, process_challenge_name,
+    callback_challenge_type, process_start_date, process_end_date,
+    callback_challenge_pricing, process_entry_amount, process_challenge_desc,
+    callback_confirm_create, callback_cancel_create, callback_view_active_challenges,
+    callback_payment_status, callback_challenge_stats, get_admin_challenge_handler
 )
 from src.handlers.misc_handlers import cmd_whoami
 from src.handlers.broadcast_handlers import (
     get_broadcast_conversation_handler, cmd_followup_settings,
-    view_broadcast_history, send_followup_to_inactive_users
+    view_broadcast_history, send_followup_to_inactive_users,
+    cmd_tune_followup_settings, callback_tune_followup_interval
 )
 from src.handlers.payment_request_handlers import (
     payment_request_conversation, approval_conversation,
@@ -88,6 +100,9 @@ from src.handlers.subscription_handlers import (
     get_subscription_conversation_handler, get_admin_approval_conversation_handler,
     callback_admin_reject_upi, callback_admin_reject_cash
 )
+from src.handlers.ar_handlers import (
+    get_ar_conversation_handler, ar_export_overdue, ar_credit_summary
+)
 from src.handlers.admin_settings_handlers import (
     cmd_admin_settings, get_admin_settings_handler
 )
@@ -96,7 +111,8 @@ from src.handlers.reminder_settings_handlers import (
 )
 from src.utils.scheduled_jobs import (
     send_eod_report, check_expired_memberships,
-    send_water_reminder_hourly, send_weight_reminder_morning, send_habits_reminder_evening
+    send_water_reminder_hourly, send_weight_reminder_morning, send_habits_reminder_evening,
+    send_shake_credit_reminders
 )
 from src.utils.subscription_scheduler import (
     send_expiry_reminders, send_grace_period_reminders,
@@ -144,7 +160,6 @@ def _get_commands_for_role(role: str) -> list:
         BotCommand("my_challenges", "My challenges"),
         BotCommand("notifications", "My notifications"),
         BotCommand("whoami", "Show my ID & role"),
-        BotCommand("payment_status", "Payment status"),
         BotCommand("subscribe", "Subscribe to gym membership"),
         BotCommand("my_subscription", "View subscription status"),
     ]
@@ -187,8 +202,12 @@ async def _set_bot_commands(application: Application) -> None:
     get their role-specific command list set when they interact with /start.
     """
     # Set default global commands (user-level) that all users will see initially
-    commands = _get_commands_for_role("user")
-    await application.bot.set_my_commands(commands)
+    try:
+        commands = _get_commands_for_role("user")
+        await application.bot.set_my_commands(commands)
+        logger.info("Global commands set successfully")
+    except Exception as e:
+        logger.warning(f"Could not set global commands (non-critical): {e}")
     
     # Set the menu button to show commands
     try:
@@ -282,7 +301,10 @@ def main():
     
     # Activity logging conversations
     weight_handler = ConversationHandler(
-        entry_points=[CommandHandler('weight', cmd_weight)],
+        entry_points=[
+            CommandHandler('weight', cmd_weight),
+            CallbackQueryHandler(cmd_weight, pattern="^cmd_weight$")
+        ],
         states={
             WEIGHT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weight_input)],
         },
@@ -290,7 +312,10 @@ def main():
     )
     
     water_handler = ConversationHandler(
-        entry_points=[CommandHandler('water', cmd_water)],
+        entry_points=[
+            CommandHandler('water', cmd_water),
+            CallbackQueryHandler(cmd_water, pattern="^cmd_water$")
+        ],
         states={
             WATER_CUPS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_water)],
         },
@@ -298,7 +323,10 @@ def main():
     )
     
     meal_handler = ConversationHandler(
-        entry_points=[CommandHandler('meal', cmd_meal)],
+        entry_points=[
+            CommandHandler('meal', cmd_meal),
+            CallbackQueryHandler(cmd_meal, pattern="^cmd_meal$")
+        ],
         states={
             MEAL_PHOTO: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), get_meal_photo)],
         },
@@ -306,7 +334,10 @@ def main():
     )
     
     habits_handler = ConversationHandler(
-        entry_points=[CommandHandler('habits', cmd_habits)],
+        entry_points=[
+            CommandHandler('habits', cmd_habits),
+            CallbackQueryHandler(cmd_habits, pattern="^cmd_habits$")
+        ],
         states={
             HABITS_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_habits_confirm)],
         },
@@ -353,6 +384,7 @@ def main():
     application.add_handler(CommandHandler('add_admin', cmd_add_admin))
     application.add_handler(CommandHandler('remove_admin', cmd_remove_admin))
     application.add_handler(CommandHandler('list_admins', cmd_list_admins))
+    application.add_handler(get_manual_shake_deduction_handler())  # Manual shake deduction
     
     # NEW: Enhanced Admin Panel Handlers - MUST be BEFORE numeric handlers
     application.add_handler(CommandHandler('admin_panel', cmd_admin_panel))
@@ -369,6 +401,9 @@ def main():
     
     # Reminder settings handler
     application.add_handler(get_reminder_conversation_handler())
+
+    # Accounts Receivable (split-payment) conversation
+    application.add_handler(get_ar_conversation_handler())
     
     application.add_handler(CallbackQueryHandler(callback_admin_approve_sub, pattern="^admin_sub_approve$"))
     application.add_handler(CallbackQueryHandler(callback_approve_sub_standard, pattern="^sub_approve_"))
@@ -391,7 +426,6 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$"))
     
     # Phase 3 handlers
-    application.add_handler(CommandHandler('payment_status', cmd_payment_status))
     application.add_handler(CommandHandler('challenges', cmd_challenges))
     application.add_handler(CommandHandler('my_challenges', cmd_my_challenges))
     application.add_handler(CommandHandler('notifications', cmd_notifications))
@@ -401,6 +435,8 @@ def main():
     application.add_handler(get_broadcast_conversation_handler())
     application.add_handler(CommandHandler('followup_settings', cmd_followup_settings))
     application.add_handler(CallbackQueryHandler(cmd_followup_settings, pattern="^cmd_followup_settings$"))
+    application.add_handler(CallbackQueryHandler(cmd_tune_followup_settings, pattern="^tune_followup_settings$"))
+    application.add_handler(CallbackQueryHandler(callback_tune_followup_interval, pattern="^tune_(7day|14day|30day)$"))
     application.add_handler(CallbackQueryHandler(view_broadcast_history, pattern="^view_followup_log$"))
     
     # Payment request handlers
@@ -426,6 +462,14 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_report_export, pattern="^report_export$"))
     application.add_handler(CallbackQueryHandler(callback_move_expired, pattern="^report_move_expired$"))
     
+    # Analytics dashboard handlers (FIXED: Register all callbacks directly)
+    application.add_handler(CallbackQueryHandler(callback_revenue_stats, pattern="^dashboard_revenue$"))
+    application.add_handler(CallbackQueryHandler(callback_member_stats, pattern="^dashboard_members$"))
+    application.add_handler(CallbackQueryHandler(callback_engagement_stats, pattern="^dashboard_engagement$"))
+    application.add_handler(CallbackQueryHandler(callback_challenge_stats, pattern="^dashboard_challenges$"))
+    application.add_handler(CallbackQueryHandler(callback_top_activities, pattern="^dashboard_activities$"))
+    application.add_handler(CallbackQueryHandler(callback_admin_dashboard, pattern="^admin_dashboard$"))
+    
     # Callback query handler for inline buttons (exclude subscription/payment callbacks)
     application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_)"))
     application.add_handler(CallbackQueryHandler(handle_analytics_callback))
@@ -436,6 +480,9 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_close_notifications, pattern="^close_notif$"))
     application.add_handler(CallbackQueryHandler(callback_admin_pending_subs, pattern="^admin_pending_subs$"))
     application.add_handler(CallbackQueryHandler(callback_admin_pending_payments, pattern="^admin_pending_payments$"))
+    # AR export overdue list
+    application.add_handler(CallbackQueryHandler(ar_export_overdue, pattern="^ar_export_overdue$"))
+    application.add_handler(CallbackQueryHandler(ar_credit_summary, pattern="^ar_credit_summary$"))
     application.add_handler(CallbackQueryHandler(callback_admin_my_notifs, pattern="^admin_my_notifs$"))
     application.add_handler(CallbackQueryHandler(callback_challenge_view, pattern="^challenge_view_"))
     application.add_handler(CallbackQueryHandler(callback_challenge_join, pattern="^challenge_join_"))
@@ -444,6 +491,19 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_challenge_back, pattern="^challenge_back$"))
     application.add_handler(CallbackQueryHandler(callback_challenge_close, pattern="^challenge_close$"))
     application.add_handler(CallbackQueryHandler(callback_close, pattern="^close$"))
+    
+    # Phase 6: Admin Challenge Creation Handlers
+    application.add_handler(CommandHandler('admin_challenges', cmd_admin_challenges))
+    application.add_handler(get_admin_challenge_handler())
+    application.add_handler(CallbackQueryHandler(callback_create_challenge, pattern="^admin_create_challenge$"))
+    application.add_handler(CallbackQueryHandler(callback_view_active_challenges, pattern="^admin_view_active_challenges$"))
+    application.add_handler(CallbackQueryHandler(callback_payment_status, pattern="^admin_payment_status$"))
+    application.add_handler(CallbackQueryHandler(callback_challenge_stats, pattern="^admin_challenge_stats$"))
+    application.add_handler(CallbackQueryHandler(callback_confirm_create, pattern="^confirm_create_challenge$"))
+    application.add_handler(CallbackQueryHandler(callback_cancel_create, pattern="^cancel_create_challenge$"))
+    
+    # Phase 7: Challenge callbacks from challenge_handlers.py
+    register_challenge_callbacks(application)
     
     # Quick action handlers for reminders (from inline reminder messages)
     from src.handlers.reminder_settings_handlers import (
@@ -510,6 +570,26 @@ def main():
     )
     logger.info("Scheduled evening habits reminder at 8:00 PM")
     
+    # Shake credit payment reminders every day at 11 AM
+    job_queue.run_daily(
+        send_shake_credit_reminders,
+        time=time(hour=11, minute=0),  # 11:00 AM every day
+        name="shake_credit_payment_reminders"
+    )
+    logger.info("Scheduled shake credit payment reminders at 11:00 AM")
+
+    # Receivables reminders every day at 11:05 AM (placeholder hook)
+    try:
+        from src.utils.scheduled_jobs import send_receivables_reminders
+        job_queue.run_daily(
+            send_receivables_reminders,
+            time=time(hour=11, minute=5),
+            name="receivables_reminders"
+        )
+        logger.info("Scheduled receivables reminders at 11:05 AM")
+    except Exception as e:
+        logger.warning(f"Receivables reminder hook not registered: {e}")
+    
     # Subscription expiry reminders at 9 AM
     job_queue.run_daily(
         lambda context: send_expiry_reminders(context.bot),
@@ -543,8 +623,29 @@ def main():
     )
     logger.info("Scheduled expired subscription locking at 00:05")
     
+    # Add global error handler for unhandled exceptions
+    async def error_handler(update, context):
+        """Log errors and ignore BadRequest errors from expired queries"""
+        if context.error is None:
+            return
+        # Ignore BadRequest errors from expired callback queries
+        if "BadRequest" in str(type(context.error).__name__):
+            logger.debug(f"Ignoring BadRequest error (likely expired query): {context.error}")
+            return
+        logger.error(f"An error occurred: {context.error}", exc_info=context.error)
+    
+    application.add_error_handler(error_handler)
+    
     logger.info("Bot starting...")
-    application.run_polling(allowed_updates=['message', 'callback_query'])
+    logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
+    try:
+        application.run_polling(
+            allowed_updates=['message', 'callback_query'],
+            stop_signals=(),  # disable SIGTERM/SIGINT-based auto-stop
+        )
+    except Exception as e:
+        logger.error(f"Polling error: {e}", exc_info=True)
+    logger.info("Polling loop exited")
 
 if __name__ == '__main__':
     main()

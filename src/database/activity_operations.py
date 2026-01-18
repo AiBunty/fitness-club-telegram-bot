@@ -44,6 +44,16 @@ def get_yesterday_weight(user_id: int):
     result = execute_query(query, (user_id,), fetch_one=True)
     return result['weight'] if result else None
 
+def get_today_weight(user_id: int):
+    """Check if weight was already logged today"""
+    query = """
+        SELECT weight FROM daily_logs 
+        WHERE user_id = %s AND log_date = CURRENT_DATE
+        AND weight IS NOT NULL
+    """
+    result = execute_query(query, (user_id,), fetch_one=True)
+    return result['weight'] if result else None
+
 def log_weight(user_id: int, weight: float):
     """Log weight for today"""
     query = """

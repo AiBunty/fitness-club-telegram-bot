@@ -2,13 +2,13 @@ import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from src.database.activity_operations import (
-    log_weight, log_water, log_meal, log_habits, get_today_log
+    log_weight, log_water, log_meal, log_habits, get_today_log, get_today_weight, get_yesterday_weight
 )
 from src.database.attendance_operations import (
     create_attendance_request, get_user_attendance_today
 )
-from src.utils.auth import is_fee_paid
 from src.utils.guards import check_approval
+from src.utils.cutoff_enforcement import enforce_cutoff_check
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,16 @@ async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_approval(update, context):
         return ConversationHandler.END
     
+    # Check cutoff time
+    allowed, cutoff_message = enforce_cutoff_check("weight logging")
+    if not allowed:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(cutoff_message)
+        else:
+            await update.message.reply_text(cutoff_message)
+        return ConversationHandler.END
+    
     # Handle both command and callback contexts
     if update.callback_query:
         await update.callback_query.answer()
@@ -30,17 +40,26 @@ async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.message.from_user
         message = update.message
     
-    # Check if fee is paid
-    if not is_fee_paid(user.id):
+    # Check if weight already entered today
+    today_weight = get_today_weight(user.id)
+    if today_weight:
+        keyboard = [
+            [InlineKeyboardButton("✏️ Edit Weight", callback_data="edit_weight")],
+            [InlineKeyboardButton("👋 Come Tomorrow", callback_data="cancel")],
+        ]
         await message.reply_text(
-            "❌ *Membership fee not paid!*\n\n"
-            "Please pay your membership fee to access all features.\n\n"
-            "Use /menu → 💳 Payment Status to pay.",
+            f"✅ *Weight Already Logged Today*\n\n"
+            f"📊 Your Weight: {today_weight} kg\n\n"
+            f"You have already entered your weight for today. "
+            f"Come back tomorrow to log again! 💪\n\n"
+            f"Want to edit it?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
+        logger.info(f"[WEIGHT_DUPLICATE] User {user.id} attempted to log weight again. Already logged: {today_weight}kg")
         return ConversationHandler.END
     
-    logger.info(f"User {user.id} started weight logging")
+    logger.info(f"User {user.id} started weight logging - Chat ID: {message.chat_id}")
     
     reply_keyboard = [["⏭️ Skip"], ["❌ Cancel"]]
     await message.reply_text(
@@ -48,6 +67,7 @@ async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         parse_mode="Markdown"
     )
+    logger.info(f"[WEIGHT_MSG_SENT] Sent to chat_id: {message.chat_id}")
     
     return WEIGHT_VALUE
 
@@ -127,6 +147,16 @@ async def cmd_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_approval(update, context):
         return ConversationHandler.END
     
+    # Check cutoff time
+    allowed, cutoff_message = enforce_cutoff_check("water logging")
+    if not allowed:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(cutoff_message)
+        else:
+            await update.message.reply_text(cutoff_message)
+        return ConversationHandler.END
+    
     # Handle both command and callback contexts
     if update.callback_query:
         await update.callback_query.answer()
@@ -136,17 +166,7 @@ async def cmd_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.message.from_user
         message = update.message
     
-    # Check if fee is paid
-    if not is_fee_paid(user.id):
-        await message.reply_text(
-            "❌ *Membership fee not paid!*\n\n"
-            "Please pay your membership fee to access all features.\n\n"
-            "Use /menu → 💳 Payment Status to pay.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-    
-    logger.info(f"User {user.id} started water logging")
+    logger.info(f"User {user.id} started water logging - Chat ID: {message.chat_id}")
     
     reply_keyboard = [["1", "2", "3"], ["4", "5"], ["❌ Cancel"]]
     await message.reply_text(
@@ -154,6 +174,7 @@ async def cmd_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
         parse_mode="Markdown"
     )
+    logger.info(f"[WATER_MSG_SENT] Sent to chat_id: {message.chat_id}")
     
     return WATER_CUPS
 
@@ -207,6 +228,16 @@ async def cmd_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start meal photo logging"""
     # Check if approved first
     if not await check_approval(update, context):
+        return ConversationHandler.END
+    
+    # Check cutoff time
+    allowed, cutoff_message = enforce_cutoff_check("meal logging")
+    if not allowed:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(cutoff_message)
+        else:
+            await update.message.reply_text(cutoff_message)
         return ConversationHandler.END
     
     # Handle both command and callback contexts
@@ -277,6 +308,16 @@ async def cmd_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_approval(update, context):
         return ConversationHandler.END
     
+    # Check cutoff time
+    allowed, cutoff_message = enforce_cutoff_check("habit tracking")
+    if not allowed:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(cutoff_message)
+        else:
+            await update.message.reply_text(cutoff_message)
+        return ConversationHandler.END
+    
     # Handle both command and callback contexts
     if update.callback_query:
         await update.callback_query.answer()
@@ -285,16 +326,6 @@ async def cmd_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         user = update.message.from_user
         message = update.message
-    
-    # Check if fee is paid
-    if not is_fee_paid(user.id):
-        await message.reply_text(
-            "❌ *Membership fee not paid!*\n\n"
-            "Please pay your membership fee to access all features.\n\n"
-            "Use /menu → 💳 Payment Status to pay.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
     
     logger.info(f"User {user.id} starting habit completion")
     
@@ -392,11 +423,20 @@ async def get_habits_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_reply_markup(reply_markup=keyboard)
     
     return HABITS_CONFIRM
-
 async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start check-in process"""
     # Check if approved first
     if not await check_approval(update, context):
+        return ConversationHandler.END
+    
+    # Check cutoff time
+    allowed, cutoff_message = enforce_cutoff_check("gym check-in")
+    if not allowed:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(cutoff_message)
+        else:
+            await update.message.reply_text(cutoff_message)
         return ConversationHandler.END
     
     # Handle both command and callback contexts
@@ -407,16 +447,6 @@ async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         user = update.message.from_user
         message = update.message
-    
-    # Check if fee is paid
-    if not is_fee_paid(user.id):
-        await message.reply_text(
-            "❌ *Membership fee not paid!*\n\n"
-            "Please pay your membership fee to access all features.\n\n"
-            "Use /menu → 💳 Payment Status to pay.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
     
     logger.info(f"User {user.id} started check-in")
     

@@ -3,6 +3,7 @@ Broadcast messaging system for admin
 - Personalized messages to all users
 - Targeted broadcasts (active/inactive users)
 - Automated follow-up system for inactive members
+- Product launch broadcasts (subscriptions, PT plans, events, store products)
 """
 
 import logging
@@ -379,6 +380,7 @@ async def cmd_followup_settings(update: Update, context: ContextTypes.DEFAULT_TY
     stats = execute_query(query, fetch_one=True)
     
     keyboard = [
+        [InlineKeyboardButton("⚙️ Tune Settings", callback_data="tune_followup_settings")],
         [InlineKeyboardButton("📊 View Follow-up Log", callback_data="view_followup_log")],
         [InlineKeyboardButton("🔙 Back", callback_data="cmd_admin_dashboard")]
     ]
@@ -443,6 +445,144 @@ async def view_broadcast_history(update: Update, context: ContextTypes.DEFAULT_T
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 
+# ============ Product Launch Broadcasts ============
+
+async def broadcast_new_subscription_plan(context: ContextTypes.DEFAULT_TYPE, plan_name: str, 
+                                         duration: int, price: float, description: str = ""):
+    """Broadcast new subscription plan to all members"""
+    try:
+        users = execute_query("""
+            SELECT user_id FROM users 
+            WHERE status = 'active' AND is_approved = 1
+            ORDER BY user_id
+        """)
+        
+        if not users:
+            logger.warning("No active users found for broadcast")
+            return
+        
+        message = (
+            f"📅 *New Subscription Plan Available!*\n\n"
+            f"✨ **{plan_name}**\n"
+            f"⏱️ Duration: {duration} days\n"
+            f"💵 Price: Rs {price}\n"
+        )
+        if description:
+            message += f"📝 {description}\n"
+        
+        message += (
+            f"\n🔗 Tap 'Browse Subscriptions' in menu to subscribe!\n"
+            f"Don't miss this offer! 💪"
+        )
+        
+        count = 0
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                count += 1
+            except Exception as e:
+                logger.debug(f"Could not send to user {user['user_id']}: {e}")
+        
+        logger.info(f"Broadcast sent to {count} users for new plan: {plan_name}")
+    except Exception as e:
+        logger.error(f"Error broadcasting new plan: {e}")
+
+
+async def broadcast_new_store_products(context: ContextTypes.DEFAULT_TYPE, product_count: int, 
+                                       sample_products: list):
+    """Broadcast new store products to all members"""
+    try:
+        users = execute_query("""
+            SELECT user_id FROM users 
+            WHERE status = 'active' AND is_approved = 1
+            ORDER BY user_id
+        """)
+        
+        if not users:
+            logger.warning("No active users found for broadcast")
+            return
+        
+        product_list = "\n".join([f"• {p}" for p in sample_products[:5]])
+        
+        message = (
+            f"🛒 *New Store Products Available!*\n\n"
+            f"📦 We've added {product_count} new products to our store!\n\n"
+            f"**Featured:**\n{product_list}"
+        )
+        if len(sample_products) > 5:
+            message += f"\n... and {len(sample_products) - 5} more!"
+        
+        message += (
+            f"\n\n🔗 Browse our store now: Tap 'Store' in menu\n"
+            f"🎁 Don't miss out on great deals!"
+        )
+        
+        count = 0
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                count += 1
+            except Exception as e:
+                logger.debug(f"Could not send to user {user['user_id']}: {e}")
+        
+        logger.info(f"Broadcast sent to {count} users for new products")
+    except Exception as e:
+        logger.error(f"Error broadcasting new products: {e}")
+
+
+async def broadcast_new_event(context: ContextTypes.DEFAULT_TYPE, event_name: str, 
+                             event_date: str, price: float, description: str = ""):
+    """Broadcast new one-day event to all members"""
+    try:
+        users = execute_query("""
+            SELECT user_id FROM users 
+            WHERE status = 'active' AND is_approved = 1
+            ORDER BY user_id
+        """)
+        
+        if not users:
+            logger.warning("No active users found for broadcast")
+            return
+        
+        message = (
+            f"🎉 *New Event Announcement!*\n\n"
+            f"✨ **{event_name}**\n"
+            f"📅 Date: {event_date}\n"
+            f"💵 Price: Rs {price}\n"
+        )
+        if description:
+            message += f"📝 {description}\n"
+        
+        message += (
+            f"\n🔗 Register now: Tap 'Events' in menu\n"
+            f"Limited slots available! ⚡"
+        )
+        
+        count = 0
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                count += 1
+            except Exception as e:
+                logger.debug(f"Could not send to user {user['user_id']}: {e}")
+        
+        logger.info(f"Broadcast sent to {count} users for new event: {event_name}")
+    except Exception as e:
+        logger.error(f"Error broadcasting new event: {e}")
+
+
 # Create conversation handler
 def get_broadcast_conversation_handler():
     """Returns the ConversationHandler for broadcast system"""
@@ -467,3 +607,72 @@ def get_broadcast_conversation_handler():
         name="broadcast_conversation",
         persistent=False
     )
+
+
+# ==================== TUNE FOLLOW-UP SETTINGS ====================
+
+async def cmd_tune_followup_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Tune automated follow-up settings"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        message = query.message
+    else:
+        message = update.message
+    
+    if not is_admin_db(update.effective_user.id):
+        await message.reply_text("❌ Admin access only.")
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("📅 7-Day Follow-up", callback_data="tune_7day"),
+         InlineKeyboardButton("📅 14-Day Follow-up", callback_data="tune_14day")],
+        [InlineKeyboardButton("📅 30-Day Follow-up", callback_data="tune_30day")],
+        [InlineKeyboardButton("🔙 Back", callback_data="cmd_followup_settings")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "⚙️ *Tune Follow-up Settings*\n\n"
+        "Select a follow-up interval to customize the message template:\n\n"
+        "• 7-Day: For users inactive 7+ days\n"
+        "• 14-Day: For users inactive 14+ days\n"
+        "• 30-Day: For users inactive 30+ days\n\n"
+        "_Note: Edit templates via database directly for production_"
+    )
+    
+    if query:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+
+async def callback_tune_followup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show tune options for specific follow-up interval"""
+    query = update.callback_query
+    await query.answer()
+    
+    interval_map = {
+        "tune_7day": ("7-Day", "followup_7d"),
+        "tune_14day": ("14-Day", "followup_14d"),
+        "tune_30day": ("30-Day", "followup_30d")
+    }
+    
+    if query.data not in interval_map:
+        return
+    
+    interval_name, interval_key = interval_map[query.data]
+    
+    keyboard = [
+        [InlineKeyboardButton("📝 View Current Message", callback_data=f"view_{interval_key}")],
+        [InlineKeyboardButton("💬 View Statistics", callback_data=f"stats_{interval_key}")],
+        [InlineKeyboardButton("🔙 Back", callback_data="tune_followup_settings")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"⚙️ *{interval_name} Follow-up Settings*\n\n"
+    text += f"Key: {interval_key}\n"
+    text += "Customize this follow-up message by updating the broadcast_templates table in the database.\n\n"
+    text += "_To edit: Use SQL to update the message template where template_key = '" + interval_key + "'_"
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")

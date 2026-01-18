@@ -1,6 +1,6 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src.database.attendance_operations import (
     get_pending_attendance_requests, approve_attendance, reject_attendance, award_weekly_bonus
 )
@@ -12,6 +12,7 @@ from src.database.staff_operations import add_staff, remove_staff, list_staff
 from src.database.admin_operations import add_admin, remove_admin
 from src.database.role_operations import list_admins
 from src.database.user_operations import approve_user, reject_user, get_pending_users, get_user
+from src.handlers.user_handlers import cancel_registration
 
 logger = logging.getLogger(__name__)
 
@@ -994,3 +995,139 @@ async def cmd_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "\nUse the buttons on registration notifications to approve/reject."
     
     await message.reply_text(text, parse_mode='Markdown')
+
+# ==================== MANUAL SHAKE DEDUCTION ====================
+
+# Conversation states
+MANUAL_SHAKE_SELECT_USER, MANUAL_SHAKE_ENTER_AMOUNT, MANUAL_SHAKE_CONFIRM = range(3)
+
+
+async def cmd_manual_shake_deduction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start manual shake deduction flow"""
+    if update.callback_query:
+        await update.callback_query.answer()
+        message = update.callback_query.message
+        user_id = update.callback_query.from_user.id
+    else:
+        message = update.message
+        user_id = update.effective_user.id
+    
+    if not is_admin_id(user_id):
+        await message.reply_text("❌ Admin access only.")
+        return ConversationHandler.END
+    
+    context.user_data['shake_deduction'] = {'admin_id': user_id}
+    
+    text = "👤 Enter the user's Telegram ID to deduct shakes:"
+    if update.callback_query:
+        await message.edit_text(text)
+    else:
+        await message.reply_text(text)
+    
+    return MANUAL_SHAKE_SELECT_USER
+
+
+async def manual_shake_enter_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get user ID for shake deduction"""
+    try:
+        user_id_str = update.message.text.strip()
+        target_user_id = int(user_id_str)
+        
+        # Verify user exists
+        user = get_user(target_user_id)
+        if not user:
+            await update.message.reply_text(f"❌ User {target_user_id} not found. Try again:")
+            return MANUAL_SHAKE_SELECT_USER
+        
+        context.user_data['shake_deduction']['target_user_id'] = target_user_id
+        context.user_data['shake_deduction']['target_user_name'] = user.get('full_name', 'Unknown')
+        
+        await update.message.reply_text(
+            f"✅ User: *{user.get('full_name', 'Unknown')}*\n\n"
+            f"💰 Enter number of shakes to deduct:",
+            parse_mode="Markdown"
+        )
+        return MANUAL_SHAKE_ENTER_AMOUNT
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid numeric Telegram ID.")
+        return MANUAL_SHAKE_SELECT_USER
+
+
+async def manual_shake_enter_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get amount of shakes to deduct"""
+    try:
+        amount = int(update.message.text.strip())
+        if amount <= 0:
+            await update.message.reply_text("❌ Amount must be greater than 0. Try again:")
+            return MANUAL_SHAKE_ENTER_AMOUNT
+        
+        context.user_data['shake_deduction']['amount'] = amount
+        
+        target_user = context.user_data['shake_deduction']['target_user_name']
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Confirm", callback_data="manual_shake_confirm"),
+             InlineKeyboardButton("❌ Cancel", callback_data="manual_shake_cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            f"🥛 *Shake Deduction Confirmation*\n\n"
+            f"User: {target_user}\n"
+            f"Shakes to Deduct: {amount}\n\n"
+            f"Proceed?"
+        )
+        
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        return MANUAL_SHAKE_CONFIRM
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid number of shakes.")
+        return MANUAL_SHAKE_ENTER_AMOUNT
+
+
+async def manual_shake_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and process shake deduction"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if data == "manual_shake_cancel":
+        await query.edit_message_text("❌ Shake deduction cancelled.")
+        return ConversationHandler.END
+    
+    # Deduct the shakes
+    target_user_id = context.user_data['shake_deduction']['target_user_id']
+    amount = context.user_data['shake_deduction']['amount']
+    admin_id = context.user_data['shake_deduction']['admin_id']
+    target_user_name = context.user_data['shake_deduction']['target_user_name']
+    
+    try:
+        # Log the deduction in database
+        deduct_query = """
+            INSERT INTO shake_log (user_id, quantity, reason, created_by, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+        """
+        from src.database.connection import execute_query
+        execute_query(deduct_query, (target_user_id, -amount, 'Manual deduction by admin', admin_id))
+        
+        await query.edit_message_text(
+            f"✅ Successfully deducted {amount} shakes from {target_user_name}"
+        )
+    except Exception as e:
+        logger.error(f"Error deducting shakes: {e}")
+        await query.edit_message_text(f"❌ Error: {str(e)}")
+    
+    return ConversationHandler.END
+
+
+def get_manual_shake_deduction_handler():
+    """Return ConversationHandler for manual shake deduction"""
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cmd_manual_shake_deduction, pattern="^cmd_manual_shake_deduction$")],
+        states={
+            MANUAL_SHAKE_SELECT_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_shake_enter_user)],
+            MANUAL_SHAKE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_shake_enter_amount)],
+            MANUAL_SHAKE_CONFIRM: [CallbackQueryHandler(manual_shake_confirm, pattern="^manual_shake_")]
+        },
+        fallbacks=[CommandHandler('cancel', cancel_registration)]
+    )

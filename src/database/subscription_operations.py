@@ -7,6 +7,12 @@ Subscription Management Operations
 import logging
 from datetime import datetime, timedelta
 from src.database.connection import execute_query
+from src.database.ar_operations import (
+    create_receivable,
+    create_transactions,
+    get_receivable_by_source,
+    update_receivable_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +171,19 @@ def approve_subscription(request_id: int, amount: int, end_date: datetime) -> bo
         
         user_id, plan_id = request['user_id'], request['plan_id']
         start_date = datetime.now()
+
+        # Ensure AR receivable exists for this subscription request
+        receivable = get_receivable_by_source('subscription', request_id)
+        if not receivable:
+            receivable = create_receivable(
+                user_id=user_id,
+                receivable_type='subscription',
+                source_id=request_id,
+                bill_amount=amount,
+                discount_amount=0,
+                final_amount=amount,
+                due_date=end_date.date() if end_date else None,
+            )
         
         # Update subscription_requests status
         execute_query(
@@ -420,6 +439,16 @@ def record_payment(user_id: int, request_id: int, amount: float, payment_method:
         screenshot_file_id: Telegram file_id for UPI payment screenshot (optional)
     """
     try:
+        # Fetch request details for AR linkage
+        req = execute_query(
+            "SELECT user_id, amount FROM subscription_requests WHERE id = %s",
+            (request_id,),
+            fetch_one=True,
+        )
+        if not req:
+            logger.error(f"Subscription request not found for payment: {request_id}")
+            return None
+
         result = execute_query(
             """
             INSERT INTO subscription_payments (user_id, request_id, amount, payment_method, reference, screenshot_file_id, status, paid_at)
@@ -434,6 +463,30 @@ def record_payment(user_id: int, request_id: int, amount: float, payment_method:
             logger.info(
                 f"Payment recorded: User {user_id}, Amount {amount}, Method {payment_method}, Screenshot: {'Yes' if screenshot_file_id else 'No'}"
             )
+
+            # Mirror payment into AR ledger
+            try:
+                receivable = get_receivable_by_source('subscription', request_id)
+                if not receivable:
+                    receivable = create_receivable(
+                        user_id=req['user_id'],
+                        receivable_type='subscription',
+                        source_id=request_id,
+                        bill_amount=req.get('amount', amount),
+                        discount_amount=0,
+                        final_amount=req.get('amount', amount),
+                    )
+                rid = receivable.get('receivable_id')
+                if rid:
+                    create_transactions(
+                        receivable_id=rid,
+                        lines=[{'method': payment_method, 'amount': amount, 'reference': reference}],
+                        admin_user_id=None,
+                    )
+                    update_receivable_status(rid)
+            except Exception as ar_err:
+                logger.error(f"Failed to mirror subscription payment into AR: {ar_err}")
+
             return {
                 "payment_id": result.get("id"),
                 "user_id": result.get("user_id"),

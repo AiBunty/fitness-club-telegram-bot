@@ -19,7 +19,7 @@ from src.config import POINTS_CONFIG
 logger = logging.getLogger(__name__)
 
 # Conversation states
-BUY_CREDITS, CONFIRM_PURCHASE, ORDER_SHAKE_FLAVOR, ADMIN_SELECT_USER_DATE = range(4)
+BUY_CREDITS, CONFIRM_PURCHASE, SELECT_PAYMENT_METHOD, ENTER_UPI_ID, ORDER_SHAKE_FLAVOR, ADMIN_SELECT_USER_DATE, ADMIN_ENTER_AMOUNT = range(7)
 
 
 async def cmd_buy_shake_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,6 +59,179 @@ async def cmd_buy_shake_credits(update: Update, context: ContextTypes.DEFAULT_TY
     )
     
     return BUY_CREDITS
+
+
+async def callback_confirm_buy_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle confirmation and show payment method selection"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    await query.answer()
+    
+    # Store purchase amount
+    context.user_data['shake_credits_to_buy'] = CREDITS_PER_PURCHASE
+    context.user_data['shake_credits_amount'] = CREDIT_COST
+    
+    # Show payment method selection
+    keyboard = [
+        [InlineKeyboardButton("💵 Cash Payment", callback_data="shake_pay_cash")],
+        [InlineKeyboardButton("📱 UPI Payment", callback_data="shake_pay_upi")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]
+    ]
+    
+    await query.edit_message_text(
+        f"*💳 Select Payment Method*\n\n"
+        f"Credits: {CREDITS_PER_PURCHASE}\n"
+        f"Amount: Rs {CREDIT_COST:,}\n\n"
+        f"Choose how you'd like to pay:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return SELECT_PAYMENT_METHOD
+
+
+async def callback_select_shake_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle shake credit payment method selection"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    payment_method = query.data.split("_")[2]  # 'cash' or 'upi'
+    
+    credits = context.user_data.get('shake_credits_to_buy', CREDITS_PER_PURCHASE)
+    amount = context.user_data.get('shake_credits_amount', CREDIT_COST)
+    
+    await query.answer()
+    context.user_data['shake_payment_method'] = payment_method
+    
+    if payment_method == 'cash':
+        # Cash payment - create request for admin approval
+        purchase_request = create_purchase_request(user_id, credits, 'cash')
+        
+        if not purchase_request:
+            await query.edit_message_text(
+                "❌ *Purchase Error*\n\n"
+                "Failed to create purchase request. Please try again.",
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+        
+        context.user_data['shake_purchase_id'] = purchase_request['purchase_id']
+        
+        await query.edit_message_text(
+            f"✅ *Purchase Request Created*\n\n"
+            f"🥤 Credits: {credits}\n"
+            f"💵 Amount: Rs {amount:,.2f}\n"
+            f"⏳ Status: Pending Admin Approval\n\n"
+            f"Our admin will verify your payment and transfer credits soon.",
+            parse_mode='Markdown'
+        )
+        
+        # Notify admins
+        try:
+            from src.handlers.admin_handlers import get_admin_ids
+            from src.database.user_operations import get_user
+            
+            admin_ids = get_admin_ids()
+            user_data = get_user(user_id)
+            profile_pic_url = user_data.get('profile_pic_url') if user_data else None
+            
+            admin_text = (
+                f"*💵 Shake Credit Purchase - Cash Payment*\n\n"
+                f"User: {query.from_user.full_name} (ID: {user_id})\n"
+                f"Credits: {credits}\n"
+                f"Amount: Rs {amount:,}\n"
+                f"Payment Method: 💵 Cash\n\n"
+                f"Request ID: {purchase_request['purchase_id']}\n"
+                f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}"
+            )
+            
+            admin_keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_shake_purchase_{purchase_request['purchase_id']}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_shake_purchase_{purchase_request['purchase_id']}")
+                ]
+            ]
+            
+            for admin_id in admin_ids:
+                try:
+                    if profile_pic_url:
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=admin_id,
+                                photo=profile_pic_url,
+                                caption=admin_text,
+                                reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                                parse_mode='Markdown'
+                            )
+                        except:
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=admin_text,
+                                reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                                parse_mode='Markdown'
+                            )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=admin_text,
+                            reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                            parse_mode='Markdown'
+                        )
+                    logger.info(f"Shake credit cash payment notification sent to admin {admin_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to admin {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error sending admin notifications: {e}")
+        
+        return ConversationHandler.END
+    
+    elif payment_method == 'upi':
+        # UPI payment - generate QR code
+        from src.utils.upi_qrcode import generate_upi_qr_code, get_upi_id
+        
+        qr_path = generate_upi_qr_code(amount, f"ShakeCredits_{user_id}")
+        upi_id = get_upi_id()
+        
+        if not qr_path:
+            await query.edit_message_text(
+                "❌ Failed to generate UPI QR code. Please try Cash payment or contact admin.",
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+        
+        # Create purchase request with UPI method
+        purchase_request = create_purchase_request(user_id, credits, 'upi')
+        
+        if not purchase_request:
+            await query.edit_message_text(
+                "❌ Failed to create purchase request. Please try again.",
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+        
+        context.user_data['shake_purchase_id'] = purchase_request['purchase_id']
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ I've Paid", callback_data=f"shake_upi_paid_{purchase_request['purchase_id']}")]
+        ]
+        
+        await query.message.reply_photo(
+            photo=open(qr_path, 'rb'),
+            caption=(
+                f"*📱 UPI Payment*\n\n"
+                f"💰 Amount: Rs {amount:,}\n"
+                f"📱 UPI ID: `{upi_id}`\n\n"
+                f"*Instructions:*\n"
+                f"1. Scan QR code or copy UPI ID\n"
+                f"2. Complete payment in your UPI app\n"
+                f"3. Tap 'I've Paid' after payment\n\n"
+                f"⏳ Waiting for admin verification..."
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+        return ConversationHandler.END
 
 
 async def cmd_check_shake_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -293,3 +466,162 @@ async def cmd_admin_pending_purchases(update: Update, context: ContextTypes.DEFA
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
+
+async def callback_approve_shake_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Start shake purchase approval - ask for amount"""
+    query = update.callback_query
+    
+    if not is_admin_id(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    purchase_id = int(query.data.split("_")[-1])
+    await query.answer()
+    
+    try:
+        from src.database.shake_credits_operations import get_pending_purchase_requests
+        
+        # Find the purchase request
+        purchases = get_pending_purchase_requests()
+        purchase = None
+        for p in purchases:
+            if p['purchase_id'] == purchase_id:
+                purchase = p
+                break
+        
+        if not purchase:
+            await query.edit_message_text("❌ Purchase request not found or already processed")
+            return ADMIN_ENTER_AMOUNT
+        
+        # Store in context
+        context.user_data['approving_shake_purchase_id'] = purchase_id
+        context.user_data['approving_shake_purchase'] = purchase
+        
+        # Ask for amount
+        text = (
+            f"*💰 Enter Amount Received*\n\n"
+            f"User: {purchase['full_name']}\n"
+            f"Credits: {purchase['credits_requested']}\n"
+            f"Expected: Rs {purchase['amount']:,}\n\n"
+            f"Please reply with the amount you received from the user.\n"
+            f"Example: 6000\n\n"
+            f"💡 For part payment, enter the actual amount received."
+        )
+        
+        try:
+            if getattr(query.message, "photo", None):
+                await query.edit_message_caption(text, parse_mode="Markdown")
+            else:
+                await query.edit_message_text(text, parse_mode="Markdown")
+        except:
+            await query.message.reply_text(text, parse_mode="Markdown")
+        
+        logger.info(f"Admin {query.from_user.id} starting shake purchase approval for {purchase_id}")
+        return ADMIN_ENTER_AMOUNT
+    except Exception as e:
+        logger.error(f"Error in callback_approve_shake_purchase: {e}")
+        await query.answer("❌ Error starting approval", show_alert=True)
+        return ConversationHandler.END
+
+
+async def handle_shake_approval_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle amount input for shake purchase approval"""
+    try:
+        amount_str = update.message.text.strip()
+        amount = float(amount_str)
+        
+        if amount <= 0:
+            await update.message.reply_text("❌ Amount must be positive. Try again:")
+            return ADMIN_ENTER_AMOUNT
+        
+        purchase_id = context.user_data.get('approving_shake_purchase_id')
+        purchase = context.user_data.get('approving_shake_purchase')
+        
+        if not purchase_id or not purchase:
+            await update.message.reply_text("❌ Session expired. Please start again.")
+            return ConversationHandler.END
+        
+        # Approve purchase with the provided amount
+        from src.database.shake_credits_operations import approve_purchase
+        
+        result = approve_purchase(purchase_id, update.effective_user.id, amount)
+        
+        if result:
+            user_id = purchase['user_id']
+            credits = purchase['credits_requested']
+            expected_amount = purchase['amount']
+            
+            # Calculate discount if partial payment
+            discount_text = ""
+            if amount < expected_amount:
+                discount = expected_amount - amount
+                discount_text = f"\n💸 Discount: Rs {discount:,.2f}"
+            
+            # Notify user
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"✅ *Your Shake Credit Purchase is Approved!*\n\n"
+                        f"🥤 {credits} credits added to your account\n"
+                        f"💵 Amount Paid: Rs {amount:,.2f}{discount_text}\n"
+                        f"✅ Available to use now!\n\n"
+                        f"Tap 'Order Shake' from menu to order your shake."
+                    ),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify user {user_id}: {e}")
+            
+            await update.message.reply_text(
+                f"✅ *Shake Purchase Approved!*\n\n"
+                f"User: {purchase['full_name']}\n"
+                f"Credits: {credits}\n"
+                f"Amount: Rs {amount:,.2f}{discount_text}\n\n"
+                f"Credits have been added to user's account.",
+                parse_mode='Markdown'
+            )
+            
+            # Clear context
+            context.user_data.pop('approving_shake_purchase_id', None)
+            context.user_data.pop('approving_shake_purchase', None)
+            
+            logger.info(f"Shake purchase {purchase_id} approved with amount {amount}")
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text("❌ Failed to approve purchase. Please try again.")
+            return ADMIN_ENTER_AMOUNT
+            
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Please enter a valid number:\n\nExample: 6000")
+        return ADMIN_ENTER_AMOUNT
+
+
+async def callback_reject_shake_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Reject shake purchase"""
+    query = update.callback_query
+    
+    if not is_admin_id(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    purchase_id = int(query.data.split("_")[-1])
+    await query.answer()
+    
+    try:
+        from src.database.shake_credits_operations import reject_purchase
+        
+        result = reject_purchase(purchase_id, query.from_user.id, "Rejected by admin")
+        
+        if result:
+            await query.edit_message_text(
+                "✅ *Shake Purchase Rejected!*\n\n"
+                "User has been notified.",
+                parse_mode='Markdown'
+            )
+            logger.info(f"Shake purchase {purchase_id} rejected by admin {query.from_user.id}")
+        else:
+            await query.edit_message_text("❌ Failed to reject purchase")
+    except Exception as e:
+        logger.error(f"Error rejecting shake purchase: {e}")
+        await query.answer("❌ Error rejecting purchase", show_alert=True)

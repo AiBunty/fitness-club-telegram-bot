@@ -94,12 +94,8 @@ def whoami_text(user_id: int) -> str:
 
 def is_fee_paid(user_id: int) -> bool:
     """Check if user has paid membership fee."""
-    try:
-        fee_status = get_user_fee_status(user_id)
-        return fee_status and fee_status.get('fee_status') == 'paid'
-    except Exception as e:
-        logger.error(f"Error checking fee status for user {user_id}: {e}")
-        return False
+    # Membership fee gating disabled; always allow.
+    return True
 
 def check_user_approved(user_id: int) -> bool:
     """Check if user registration is approved. Admins/staff are always approved."""

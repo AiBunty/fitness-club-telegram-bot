@@ -6,6 +6,9 @@ Handles all shake credit transactions, purchases, and consumption
 import logging
 from datetime import datetime, date
 from src.database.connection import execute_query
+from src.database.ar_operations import (
+    create_receivable, create_transactions, update_receivable_status, get_receivable_by_source
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +16,7 @@ logger = logging.getLogger(__name__)
 CREDIT_COST = 6000
 CREDITS_PER_PURCHASE = 25
 COST_PER_CREDIT = CREDIT_COST / CREDITS_PER_PURCHASE  # Rs 240 per credit
+RECEIVABLE_TYPE = 'shake_credit'
 
 
 def init_user_credits(user_id: int):
@@ -193,7 +197,7 @@ def consume_credit_with_date(user_id: int, consumption_date: date, reason: str =
         return False
 
 
-def create_purchase_request(user_id: int, credits: int) -> dict:
+def create_purchase_request(user_id: int, credits: int, payment_method: str = 'unknown') -> dict:
     """
     Create a shake credit purchase request
     Admin must approve before credits are transferred
@@ -201,6 +205,7 @@ def create_purchase_request(user_id: int, credits: int) -> dict:
     Args:
         user_id: User's Telegram ID
         credits: Number of credits to purchase (default 25)
+        payment_method: 'cash', 'upi', or 'unknown'
     
     Returns:
         Purchase request record with ID and status
@@ -210,11 +215,11 @@ def create_purchase_request(user_id: int, credits: int) -> dict:
         
         query = """
             INSERT INTO shake_purchases 
-            (user_id, credits_requested, amount, status)
-            VALUES (%s, %s, %s, 'pending')
-            RETURNING purchase_id, user_id, credits_requested, amount, status, created_at
+            (user_id, credits_requested, amount, payment_method, status)
+            VALUES (%s, %s, %s, %s, 'pending')
+            RETURNING purchase_id, user_id, credits_requested, amount, payment_method, status, created_at
         """
-        result = execute_query(query, (user_id, credits, amount), fetch_one=True)
+        result = execute_query(query, (user_id, credits, amount, payment_method), fetch_one=True)
         
         if result:
             logger.info(f"Purchase request created for user {user_id}: {credits} credits (Rs {amount})")
@@ -231,7 +236,7 @@ def get_pending_purchase_requests(limit: int = 20) -> list:
     try:
         query = """
             SELECT sp.purchase_id, sp.user_id, u.full_name, u.telegram_username,
-                   sp.credits_requested, sp.amount, sp.status, sp.created_at
+                   sp.credits_requested, sp.amount, sp.payment_method, sp.status, sp.created_at
             FROM shake_purchases sp
             JOIN users u ON sp.user_id = u.user_id
             WHERE sp.status = 'pending'
@@ -245,14 +250,15 @@ def get_pending_purchase_requests(limit: int = 20) -> list:
         return []
 
 
-def approve_purchase(purchase_id: int, admin_user_id: int) -> dict:
+def approve_purchase(purchase_id: int, admin_user_id: int, amount_paid: float = None) -> dict:
     """
     Approve a shake credit purchase request
-    This transfers the credits to user's account
+    This transfers the credits to user's account and creates AR receivable
     
     Args:
         purchase_id: Purchase request ID
         admin_user_id: Admin who approved
+        amount_paid: Actual amount received (for partial payments)
     
     Returns:
         Updated purchase record with user info
@@ -260,7 +266,7 @@ def approve_purchase(purchase_id: int, admin_user_id: int) -> dict:
     try:
         # Get purchase details
         query_get = """
-            SELECT purchase_id, user_id, credits_requested, amount, status
+            SELECT purchase_id, user_id, credits_requested, amount, payment_method, status
             FROM shake_purchases
             WHERE purchase_id = %s
         """
@@ -277,18 +283,58 @@ def approve_purchase(purchase_id: int, admin_user_id: int) -> dict:
         
         user_id = purchase['user_id']
         credits = purchase['credits_requested']
+        amount = purchase['amount']
+        payment_method = purchase.get('payment_method', 'unknown')
+        
+        # Use provided amount_paid or fall back to full amount
+        final_amount_paid = amount_paid if amount_paid is not None else amount
         
         # Update purchase status
         query_update = """
             UPDATE shake_purchases
-            SET status = 'approved', approved_by = %s, approved_at = CURRENT_TIMESTAMP
+            SET status = 'approved', approved_by = %s, approved_at = CURRENT_TIMESTAMP, amount_paid = %s
             WHERE purchase_id = %s
-            RETURNING purchase_id, user_id, credits_requested, status, approved_at
+            RETURNING purchase_id, user_id, credits_requested, status, approved_at, amount_paid
         """
-        execute_query(query_update, (admin_user_id, purchase_id))
+        execute_query(query_update, (admin_user_id, final_amount_paid, purchase_id))
         
         # Add credits to user
-        add_credits(user_id, credits, 'purchase', f"Purchased {credits} credits for Rs {purchase['amount']}")
+        add_credits(user_id, credits, 'purchase', f"Purchased {credits} credits for Rs {amount}")
+        
+        # Create or retrieve AR receivable for this purchase
+        try:
+            receivable = get_receivable_by_source(RECEIVABLE_TYPE, purchase_id)
+            if not receivable:
+                # Create new receivable with immediate due date (paid on approval)
+                # Calculate discount if partial payment
+                discount = amount - final_amount_paid
+                
+                receivable = create_receivable(
+                    user_id=user_id,
+                    receivable_type=RECEIVABLE_TYPE,
+                    source_id=purchase_id,
+                    bill_amount=amount,
+                    discount_amount=discount,
+                    final_amount=final_amount_paid,
+                    due_date=date.today()
+                )
+            
+            # Add AR transaction line with actual payment method and amount
+            if receivable and receivable.get('receivable_id'):
+                create_transactions(
+                    receivable_id=receivable['receivable_id'],
+                    lines=[{
+                        'method': payment_method,
+                        'amount': final_amount_paid,
+                        'reference': f'Shake credit purchase {purchase_id}'
+                    }],
+                    admin_user_id=admin_user_id
+                )
+                # Recompute receivable status (should mark as paid since amount collected)
+                update_receivable_status(receivable['receivable_id'])
+                logger.info(f"AR receivable {receivable['receivable_id']} created for shake purchase {purchase_id}")
+        except Exception as ar_err:
+            logger.error(f"Failed to create AR receivable for shake purchase {purchase_id}: {ar_err}")
         
         logger.info(f"Purchase {purchase_id} approved by admin {admin_user_id}. {credits} credits transferred to user {user_id}")
         

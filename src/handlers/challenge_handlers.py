@@ -1,13 +1,21 @@
 import logging
+from datetime import datetime, date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.constants import ChatAction
 from src.database.challenges_operations import (
     get_active_challenges, get_user_challenges, get_challenge_progress,
     get_challenge_leaderboard, join_challenge, get_challenge_stats,
-    CHALLENGE_TYPES
+    CHALLENGE_TYPES, get_challenge_by_id, is_user_in_challenge,
+    get_challenge_participants, get_user_rank_in_challenge
 )
+from src.database.challenge_payment_operations import approve_challenge_participation
+from src.database.motivational_operations import get_random_motivational_message
+from src.database.user_operations import get_user_by_id
 from src.database.notifications_operations import send_challenge_reminder
 from src.utils.guards import check_approval
+from src.utils.cutoff_enforcement import get_challenge_start_cutoff_message
+from src.utils.challenge_points import get_challenge_points_summary
 
 logger = logging.getLogger(__name__)
 
@@ -284,3 +292,33 @@ async def cmd_my_challenges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = f"🏆 *My Challenges* ({len(challenges)})\n\n"
     
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+
+def register_challenge_callbacks(application):
+    """Register all challenge-related callback handlers"""
+    from telegram.ext import CallbackQueryHandler
+    
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_view,
+        pattern="^view_challenge_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_join,
+        pattern="^join_challenge_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_progress,
+        pattern="^challenge_progress_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_leaderboard,
+        pattern="^challenge_board_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_back,
+        pattern="^challenge_back$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        callback_challenge_close,
+        pattern="^challenge_close$"
+    ))
+

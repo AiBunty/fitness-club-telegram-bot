@@ -13,7 +13,8 @@ from src.database.subscription_operations import (
     SUBSCRIPTION_PLANS, create_subscription_request, get_pending_subscription_requests,
     approve_subscription, reject_subscription, get_user_subscription, is_subscription_active,
     is_in_grace_period, is_subscription_expired, get_expiring_subscriptions,
-    get_users_in_grace_period, get_expired_subscriptions, mark_subscription_locked
+    get_users_in_grace_period, get_expired_subscriptions, mark_subscription_locked,
+    get_user_pending_subscription_request
 )
 from src.database.user_operations import get_user
 from src.utils.auth import is_admin
@@ -510,42 +511,61 @@ async def callback_cancel_subscription(update: Update, context: ContextTypes.DEF
 
 
 async def cmd_my_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user's current subscription"""
+    """Show user's current subscription or pending request"""
     user_id = update.effective_user.id
+    
+    # First check for active subscription
     sub = get_user_subscription(user_id)
     
-    if not sub:
+    if sub:
+        now = datetime.now()
+        days_remaining = (sub['end_date'] - now).days
+        plan = SUBSCRIPTION_PLANS.get(sub['plan_id'], {})
+        
+        if days_remaining < 0:
+            status = "⏰ *Expired*"
+        elif days_remaining <= 2:
+            status = "⚠️ *Expiring Soon*"
+        else:
+            status = "✅ *Active*"
+        
+        message = (
+            f"{status}\n\n"
+            f"Plan: {plan.get('name', 'Unknown')}\n"
+            f"Amount: Rs. {sub['amount']:,}\n"
+            f"Start Date: {sub['start_date'].strftime('%d-%m-%Y')}\n"
+            f"End Date: {sub['end_date'].strftime('%d-%m-%Y')}\n"
+            f"Days Remaining: {max(0, days_remaining)}\n\n"
+        )
+        
+        if days_remaining <= 0:
+            message += "Your subscription has expired. Use /subscribe to renew."
+        
+        await update.message.reply_text(message, parse_mode="Markdown")
+        return
+    
+    # Check for pending subscription request
+    pending = get_user_pending_subscription_request(user_id)
+    
+    if pending:
+        plan = SUBSCRIPTION_PLANS.get(pending['plan_id'], {})
         await update.message.reply_text(
-            "❌ *No Active Subscription*\n\n"
-            "Use /subscribe to purchase a subscription plan.",
+            f"⏳ *Subscription Request Pending*\n\n"
+            f"Plan: {plan.get('name', 'Unknown')}\n"
+            f"Amount: Rs. {pending['amount']:,}\n"
+            f"Status: Awaiting Admin Approval\n"
+            f"Payment Method: {pending.get('payment_method', 'Pending')}\n\n"
+            f"Our admin will review your request soon.",
             parse_mode="Markdown"
         )
         return
     
-    now = datetime.now()
-    days_remaining = (sub['end_date'] - now).days
-    plan = SUBSCRIPTION_PLANS.get(sub['plan_id'], {})
-    
-    if days_remaining < 0:
-        status = "⏰ *Expired*"
-    elif days_remaining <= 2:
-        status = "⚠️ *Expiring Soon*"
-    else:
-        status = "✅ *Active*"
-    
-    message = (
-        f"{status}\n\n"
-        f"Plan: {plan.get('name', 'Unknown')}\n"
-        f"Amount: Rs. {sub['amount']:,}\n"
-        f"Start Date: {sub['start_date'].strftime('%d-%m-%Y')}\n"
-        f"End Date: {sub['end_date'].strftime('%d-%m-%Y')}\n"
-        f"Days Remaining: {max(0, days_remaining)}\n\n"
+    # No active subscription and no pending request
+    await update.message.reply_text(
+        "❌ *No Active Subscription*\n\n"
+        "Use /subscribe to purchase a subscription plan.",
+        parse_mode="Markdown"
     )
-    
-    if days_remaining <= 0:
-        message += "Your subscription has expired. Use /subscribe to renew."
-    
-    await update.message.reply_text(message, parse_mode="Markdown")
 
 
 async def cmd_admin_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):

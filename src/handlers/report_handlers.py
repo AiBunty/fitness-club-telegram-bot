@@ -71,7 +71,7 @@ async def callback_report_overview(update: Update, context: ContextTypes.DEFAULT
 
 
 async def callback_report_active(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show active members report"""
+    """Show active members report with expiry details"""
     query = update.callback_query
     await query.answer("Generating report...")
     
@@ -79,7 +79,8 @@ async def callback_report_active(update: Update, context: ContextTypes.DEFAULT_T
     
     keyboard = [
         [InlineKeyboardButton("📥 Export Full List", callback_data="export_active")],
-        [InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu")]
+        [InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu"),
+         InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -95,7 +96,8 @@ async def callback_report_inactive(update: Update, context: ContextTypes.DEFAULT
     
     keyboard = [
         [InlineKeyboardButton("📥 Export Full List", callback_data="export_inactive")],
-        [InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu")]
+        [InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu"),
+         InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -109,7 +111,8 @@ async def callback_report_expiring(update: Update, context: ContextTypes.DEFAULT
     
     report = generate_expiring_soon_report(days=7)
     
-    keyboard = [[InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu")]]
+    keyboard = [[InlineKeyboardButton("📱 Back to Reports", callback_data="cmd_reports_menu"),
+                 InlineKeyboardButton("❌ Close", callback_data="close")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(report, reply_markup=reply_markup, parse_mode="Markdown")

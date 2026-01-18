@@ -266,17 +266,19 @@ async def confirm_shake_order(update: Update, context: ContextTypes.DEFAULT_TYPE
         ])
     )
     
-    # Send notification to admin
+    # Send notification to admin with Paid/Credit decision
     admin_text = (
-        "🔔 *NEW SHAKE ORDER - PENDING APPROVAL*\n\n"
+        "🔔 *NEW SHAKE ORDER - PAYMENT TERMS DECISION REQUIRED*\n\n"
         f"👤 *User:* {user['full_name']}\n"
         f"📱 *Telegram ID:* {user_id}\n"
         f"🥤 *Flavor:* {flavor_name}\n"
         f"📋 *Request ID:* #{shake_id}\n"
         f"📅 *Date:* {datetime.now().strftime('%d-%b-%Y')}\n"
-        f"⏰ *Time:* {datetime.now().strftime('%I:%M %p')}\n\n"
-        "⏳ *Status:* PENDING YOUR APPROVAL\n\n"
-        "Once approved and prepared, send confirmation to user."
+        f"⏰ *Time:* {datetime.now().strftime('%I:%M %p')}\n"
+        f"💳 *Credit Deducted:* 1 (Balance: {balance_after})\n\n"
+        "⚠️ *ACTION REQUIRED:* Choose payment terms\n\n"
+        "💵 *Paid* - User pays cash/online now\n"
+        "📋 *Credit Terms* - Start payment reminder follow-up"
     )
     
     # Get admin chat IDs and send notification
@@ -286,7 +288,8 @@ async def confirm_shake_order(update: Update, context: ContextTypes.DEFAULT_TYPE
             for admin_id in admin_ids:
                 try:
                     keyboard = [
-                        [InlineKeyboardButton("✅ Approve & Ready", callback_data=f"approve_shake_{shake_id}")],
+                        [InlineKeyboardButton("💵 Paid", callback_data=f"shake_paid_{shake_id}")],
+                        [InlineKeyboardButton("📋 Credit Terms", callback_data=f"shake_credit_terms_{shake_id}")],
                         [InlineKeyboardButton("❌ Cancel Order", callback_data=f"cancel_shake_{shake_id}")]
                     ]
                     await context.bot.send_message(

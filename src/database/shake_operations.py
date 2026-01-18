@@ -142,3 +142,108 @@ def get_flavor_statistics():
         ORDER BY request_count DESC
     """
     return execute_query(query)
+
+def mark_shake_paid(shake_id: int, admin_id: int):
+    """Mark shake order as PAID - approved for immediate preparation"""
+    try:
+        query = """
+            UPDATE shake_requests 
+            SET payment_status = 'paid',
+                payment_terms = 'paid',
+                payment_approved_by = %s,
+                status = 'ready'
+            WHERE shake_request_id = %s
+            RETURNING *, 
+                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
+        """
+        result = execute_query(query, (admin_id, shake_id), fetch_one=True)
+        if result:
+            logger.info(f"Shake {shake_id} marked as PAID by admin {admin_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to mark shake as paid: {e}")
+        return None
+
+
+def mark_shake_credit_terms(shake_id: int, admin_id: int):
+    """Mark shake order as CREDIT TERMS - approved for preparation with payment follow-up"""
+    try:
+        from datetime import datetime, timedelta
+        due_date = datetime.now() + timedelta(days=7)
+        
+        query = """
+            UPDATE shake_requests 
+            SET payment_status = 'pending',
+                payment_terms = 'credit',
+                payment_due_date = %s,
+                payment_approved_by = %s,
+                status = 'ready',
+                follow_up_reminder_sent = FALSE
+            WHERE shake_request_id = %s
+            RETURNING *, 
+                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
+        """
+        result = execute_query(query, (due_date.date(), admin_id, shake_id), fetch_one=True)
+        if result:
+            logger.info(f"Shake {shake_id} marked as CREDIT TERMS by admin {admin_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to mark shake as credit terms: {e}")
+        return None
+
+
+def mark_user_paid_for_shake(shake_id: int, user_id: int):
+    """User confirms payment for credit-based shake order"""
+    try:
+        query = """
+            UPDATE shake_requests 
+            SET payment_status = 'user_confirmed',
+                follow_up_reminder_sent = TRUE
+            WHERE shake_request_id = %s AND user_id = %s
+            RETURNING *
+        """
+        result = execute_query(query, (shake_id, user_id), fetch_one=True)
+        if result:
+            logger.info(f"User {user_id} confirmed payment for shake {shake_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to mark user paid: {e}")
+        return None
+
+
+def approve_user_payment(shake_id: int, admin_id: int):
+    """Admin approves user's payment confirmation for credit-based shake"""
+    try:
+        query = """
+            UPDATE shake_requests 
+            SET payment_status = 'paid',
+                payment_approved_by = %s
+            WHERE shake_request_id = %s
+            RETURNING *, user_id
+        """
+        result = execute_query(query, (admin_id, shake_id), fetch_one=True)
+        if result:
+            logger.info(f"Admin {admin_id} approved user payment for shake {shake_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to approve user payment: {e}")
+        return None
+
+
+def get_pending_credit_shake_orders():
+    """Get all shake orders pending payment with credit terms"""
+    try:
+        query = """
+            SELECT sr.*, u.full_name, u.user_id, sf.flavor_name
+            FROM shake_requests sr
+            JOIN users u ON sr.user_id = u.user_id
+            JOIN shake_flavors sf ON sr.flavor_id = sr.flavor_id
+            WHERE sr.payment_terms = 'credit'
+            AND sr.payment_status IN ('pending', 'user_confirmed')
+            AND sr.payment_due_date <= CURRENT_DATE + INTERVAL '1 day'
+            ORDER BY sr.payment_due_date ASC
+        """
+        return execute_query(query)
+    except Exception as e:
+        logger.error(f"Failed to get pending credit shake orders: {e}")
+        return []

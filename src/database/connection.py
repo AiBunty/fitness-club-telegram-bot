@@ -1,5 +1,5 @@
 import psycopg2
-from psycopg2 import InterfaceError, OperationalError
+from psycopg2 import InterfaceError, OperationalError, pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import logging
@@ -7,61 +7,82 @@ from src.config import DATABASE_CONFIG
 
 logger = logging.getLogger(__name__)
 
-class DatabaseConnection:
+class DatabaseConnectionPool:
+    """Thread-safe connection pool for concurrent user access"""
     _instance = None
-    _connection = None
+    _pool = None
     
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(DatabaseConnection, cls).__new__(cls)
+            cls._instance = super(DatabaseConnectionPool, cls).__new__(cls)
         return cls._instance
     
-    def get_connection(self):
-        if self._connection is None or self._connection.closed:
-            self._connection = psycopg2.connect(**DATABASE_CONFIG)
-            logger.info("Database connected")
-        return self._connection
+    def get_pool(self):
+        if self._pool is None or self._pool.closed:
+            # Create pool with min 5 connections, max 50 connections
+            # Handles 500-1000 concurrent users comfortably
+            # Stays well under PostgreSQL default max_connections=100
+            self._pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=5,
+                maxconn=50,
+                **DATABASE_CONFIG
+            )
+            logger.info("Database connection pool created (5-50 connections)")
+        return self._pool
+    
+    def close_pool(self):
+        """Close all connections in the pool"""
+        if self._pool:
+            self._pool.closeall()
+            logger.info("Database connection pool closed")
+
+# Backward compatibility alias
+DatabaseConnection = DatabaseConnectionPool
 
 @contextmanager
 def get_db_cursor(commit=True):
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    """Get a cursor from the connection pool with timeout handling"""
+    pool_manager = DatabaseConnectionPool()
+    pool = pool_manager.get_pool()
+    conn = None
+    cursor = None
     try:
+        # Get connection from pool (blocks if all connections busy)
+        conn = pool.getconn()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         yield cursor
         if commit:
             conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         logger.error(f"Database error: {e}")
         raise
     finally:
-        cursor.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            pool.putconn(conn)  # Return connection to pool
 
 def execute_query(query: str, params: tuple = None, fetch_one: bool = False):
-    """Execute a query with a single automatic retry if connection was closed."""
-    for attempt in range(2):
-        try:
-            with get_db_cursor() as cursor:
-                cursor.execute(query, params or ())
-                query_upper = query.strip().upper()
-                if query_upper.startswith('SELECT') or 'RETURNING' in query_upper:
-                    if fetch_one:
-                        result = cursor.fetchone()
-                        return dict(result) if result else None
-                    results = cursor.fetchall()
-                    return [dict(row) for row in results] if results else []
-                return cursor.rowcount
-        except (InterfaceError, OperationalError) as e:
-            if attempt == 0:
-                logger.warning(f"DB connection closed; reopening and retrying once. Details: {e}")
-                DatabaseConnection()._connection = None  # force reconnect
-                continue
-            logger.error(f"Query failed after retry: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Query failed: {e}")
-            raise
+    """Execute a query using connection pool - supports concurrent users"""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute(query, params or ())
+            query_upper = query.strip().upper()
+            if query_upper.startswith('SELECT') or 'RETURNING' in query_upper:
+                if fetch_one:
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+                results = cursor.fetchall()
+                return [dict(row) for row in results] if results else []
+            return cursor.rowcount
+    except (InterfaceError, OperationalError) as e:
+        logger.error(f"Query failed: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected database error: {e}")
+        raise
 
 def get_connection():
     """Get database connection (for backward compatibility)"""

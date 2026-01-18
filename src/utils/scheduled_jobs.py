@@ -237,3 +237,406 @@ async def send_habits_reminder_evening(context: ContextTypes.DEFAULT_TYPE):
     
     except Exception as e:
         logger.error(f"Error sending habits reminders: {e}")
+
+async def send_shake_credit_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send payment reminders for shake orders on credit terms
+    Runs daily at 11:00 AM
+    Checks for overdue payments and sends reminders to users
+    """
+    try:
+        logger.info("Checking for overdue shake credit payments...")
+        
+        from src.database.shake_operations import get_pending_credit_shake_orders
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        # Get all pending credit-based shake orders
+        pending_orders = get_pending_credit_shake_orders()
+        
+        if not pending_orders:
+            logger.info("No pending credit shake orders requiring reminders")
+            return
+        
+        sent_count = 0
+        for order in pending_orders:
+            try:
+                user_id = order.get('user_id')
+                shake_id = order.get('shake_request_id') or order.get('request_id')
+                flavor_name = order.get('flavor_name', f"Flavor #{order.get('flavor_id')}")
+                due_date = order.get('payment_due_date')
+                overdue_count = order.get('overdue_reminder_count', 0)
+                
+                # Skip if already sent too many reminders (max 3)
+                if overdue_count >= 3:
+                    logger.info(f"Skipping user {user_id} shake {shake_id} - max reminders sent")
+                    continue
+                
+                # Create reminder message
+                reminder_text = (
+                    "💳 *PAYMENT REMINDER - Shake Order*\n\n"
+                    f"🥤 *Flavor:* {flavor_name}\n"
+                    f"📋 *Order ID:* #{shake_id}\n"
+                    f"📅 *Due Date:* {due_date}\n"
+                    f"⚠️ *Status:* PAYMENT OVERDUE\n\n"
+                    "Your shake order payment is overdue.\n"
+                    "Please confirm payment to clear this reminder.\n\n"
+                    "💳 Click below to confirm payment:"
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ Mark as Paid", callback_data=f"user_paid_shake_{shake_id}")],
+                ]
+                
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=reminder_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+                
+                # Update reminder count
+                from src.database.connection import execute_query
+                execute_query(
+                    "UPDATE shake_requests SET overdue_reminder_count = overdue_reminder_count + 1 WHERE shake_request_id = %s",
+                    (shake_id,)
+                )
+                
+                sent_count += 1
+            except Exception as e:
+                logger.debug(f"Could not send reminder to user {order.get('user_id')}: {e}")
+        
+        logger.info(f"Shake credit payment reminders sent to {sent_count} users")
+    
+    except Exception as e:
+        logger.error(f"Error sending shake credit reminders: {e}")
+
+
+async def send_receivables_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send daily reminders for overdue accounts receivable to admins.
+    """
+    try:
+        from src.database.ar_operations import get_overdue_receivables
+        overdue = get_overdue_receivables()
+        if not overdue:
+            logger.info("No overdue receivables today")
+            return
+        count = len(overdue)
+        msg = (
+            "💳 *Overdue Receivables Summary*\n\n"
+            f"Total overdue items: {count}\n"
+            "Use Admin → 📤 Export Overdue to download CSV."
+        )
+        if SUPER_ADMIN_USER_ID:
+            await context.bot.send_message(
+                chat_id=int(SUPER_ADMIN_USER_ID),
+                text=msg,
+                parse_mode="Markdown"
+            )
+            logger.info(f"Receivables summary sent to admin: {count} items")
+    except Exception as e:
+        logger.error(f"Error sending receivables reminders: {e}")
+
+
+# ==================== CHALLENGE SYSTEM JOBS ====================
+
+async def broadcast_challenge_starts(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Broadcast challenges that are scheduled to start today at midnight
+    Runs daily at 00:05 AM
+    """
+    try:
+        from src.database.challenges_operations import (
+            get_scheduled_challenges, mark_challenge_broadcast_sent
+        )
+        from src.database.user_operations import get_all_active_users
+        
+        logger.info("Checking for challenges scheduled to start today...")
+        
+        # Get challenges scheduled for today
+        challenges = get_scheduled_challenges()
+        
+        if not challenges:
+            logger.info("No challenges scheduled to start today")
+            return
+        
+        # Get all active/approved users for broadcasting
+        active_users = get_all_active_users()
+        
+        if not active_users:
+            logger.warning("No active users to broadcast to")
+            return
+        
+        broadcast_count = 0
+        for challenge in challenges:
+            try:
+                challenge_id = challenge['challenge_id']
+                challenge_name = challenge['name']
+                start_date = challenge['start_date']
+                end_date = challenge['end_date']
+                is_free = challenge['is_free']
+                price = challenge['price']
+                
+                # Format price
+                price_str = "FREE" if is_free else f"Rs. {price}"
+                
+                # Build broadcast message with cutoff info
+                message = f"""🏆 NEW CHALLENGE STARTING TODAY!
+
+📋 {challenge_name}
+📅 Duration: {start_date} - {end_date}
+💰 Entry Fee: {price_str}
+
+⏰ IMPORTANT: Daily Cutoff - 8:00 PM
+🕗 All activities must be logged before 8:00 PM daily:
+   • Weight logs
+   • Water intake
+   • Meals & Habits
+   • Gym check-ins
+
+Points calculated at 10:00 PM each night!
+
+Join now: /challenges
+"""
+                
+                # Send to each active user
+                for user in active_users:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user['user_id'],
+                            text=message,
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not send challenge broadcast to user {user['user_id']}: {e}")
+                
+                # Mark challenge as broadcast sent and set to active
+                mark_challenge_broadcast_sent(challenge_id)
+                logger.info(f"Challenge {challenge_id} broadcast completed")
+                broadcast_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error broadcasting challenge {challenge.get('challenge_id')}: {e}")
+        
+        logger.info(f"Challenge broadcasts completed for {broadcast_count} challenges")
+    
+    except Exception as e:
+        logger.error(f"Error in broadcast_challenge_starts: {e}")
+
+
+async def process_daily_challenge_points(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Process daily challenge points and updates at 10:00 PM
+    - Calculate points for all challenge participants
+    - Update leaderboards
+    - Check for weekly bonuses
+    - Send daily summaries
+    """
+    try:
+        from src.database.challenges_operations import (
+            get_active_challenges, get_challenge_participants,
+            update_participant_daily_progress, add_participant_points
+        )
+        from src.utils.challenge_points import (
+            get_user_daily_activities, award_challenge_points, 
+            check_and_award_weekly_bonus, CHALLENGE_POINTS_CONFIG
+        )
+        
+        logger.info("Starting daily challenge point processing...")
+        
+        active_challenges = get_active_challenges()
+        
+        if not active_challenges:
+            logger.info("No active challenges for point processing")
+            return
+        
+        total_points_awarded = 0
+        total_users_processed = 0
+        
+        for challenge in active_challenges:
+            challenge_id = challenge['challenge_id']
+            challenge_name = challenge['name']
+            
+            try:
+                # Get all active participants
+                participants = get_challenge_participants(challenge_id, status='active')
+                
+                if not participants:
+                    logger.debug(f"No active participants for challenge {challenge_id}")
+                    continue
+                
+                for participant in participants:
+                    user_id = participant['user_id']
+                    user_name = participant.get('full_name', f"User {user_id}")
+                    
+                    try:
+                        from datetime import datetime
+                        today = datetime.now().date()
+                        
+                        # Get user's daily activities
+                        activities = get_user_daily_activities(user_id, today)
+                        
+                        daily_points = 0
+                        daily_summary = []
+                        
+                        # Award points for each activity
+                        if activities['checkin']:
+                            weekly_count = get_weekly_checkin_count(user_id)
+                            points = award_challenge_points(
+                                user_id, challenge_id, 'checkin',
+                                metadata={'weekly_checkins': weekly_count}
+                            )
+                            daily_points += points
+                            daily_summary.append(f"✅ Check-in: +{points} pts")
+                        
+                        if activities['water_ml'] > 0:
+                            points = award_challenge_points(
+                                user_id, challenge_id, 'water',
+                                quantity=activities['water_ml']
+                            )
+                            daily_points += points
+                            daily_summary.append(f"💧 Water: +{points} pts")
+                        
+                        if activities['weight_logged']:
+                            points = award_challenge_points(
+                                user_id, challenge_id, 'weight'
+                            )
+                            daily_points += points
+                            daily_summary.append(f"⚖️ Weight: +{points} pts")
+                        
+                        if activities['habits_count'] > 0:
+                            points = award_challenge_points(
+                                user_id, challenge_id, 'habits',
+                                quantity=activities['habits_count']
+                            )
+                            daily_points += points
+                            daily_summary.append(f"✨ Habits ({activities['habits_count']}): +{points} pts")
+                        
+                        # Update daily progress
+                        update_participant_daily_progress(
+                            user_id, challenge_id,
+                            str(today),
+                            {
+                                'points': daily_points,
+                                'activities': activities,
+                                'summary': ', '.join(daily_summary) if daily_summary else 'No activities'
+                            }
+                        )
+                        
+                        # Check for weekly bonus
+                        bonus_result = check_and_award_weekly_bonus(user_id)
+                        if bonus_result['awarded']:
+                            daily_points += bonus_result['points']
+                            daily_summary.append(f"🎉 Weekly Bonus: +{bonus_result['points']} pts")
+                        
+                        if daily_points > 0:
+                            # Notify user of daily points
+                            try:
+                                summary_text = f"""📊 Daily Points in {challenge_name}
+
+{chr(10).join(daily_summary)}
+
+🏆 Total Today: +{daily_points} pts"""
+                                
+                                await context.bot.send_message(
+                                    chat_id=user_id,
+                                    text=summary_text,
+                                    parse_mode="HTML"
+                                )
+                            except Exception as e:
+                                logger.debug(f"Could not send daily summary to user {user_id}: {e}")
+                        
+                        total_points_awarded += daily_points
+                        total_users_processed += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing points for user {user_id} in challenge {challenge_id}: {e}")
+                
+            except Exception as e:
+                logger.error(f"Error processing challenge {challenge_id}: {e}")
+        
+        logger.info(f"Daily challenge processing complete: {total_users_processed} users, {total_points_awarded} points awarded")
+    
+    except Exception as e:
+        logger.error(f"Error in process_daily_challenge_points: {e}")
+
+
+async def send_challenge_payment_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send daily payment reminders for unpaid/partial challenge entry fees
+    Runs daily at 10:00 AM
+    """
+    try:
+        from src.database.challenge_payment_operations import get_unpaid_challenge_participants
+        
+        logger.info("Sending challenge payment reminders...")
+        
+        unpaid_participants = get_unpaid_challenge_participants()
+        
+        if not unpaid_participants:
+            logger.info("No unpaid challenge participants requiring reminders")
+            return
+        
+        sent_count = 0
+        for participant in unpaid_participants:
+            try:
+                user_id = participant['user_id']
+                challenge_name = participant['challenge_name']
+                amount_due = float(participant['amount_due']) if participant['amount_due'] else 0
+                due_date = participant['due_date']
+                payment_status = participant['payment_status']
+                
+                if amount_due <= 0:
+                    continue  # Skip if nothing due
+                
+                reminder_text = f"""⚠️ Payment Reminder
+
+Challenge: {challenge_name}
+💰 Amount Due: Rs. {amount_due}
+📅 Due Date: {due_date}
+Status: {payment_status.upper()}
+
+Please complete your payment to continue participating in the challenge.
+
+Use /view_receivables to see payment details.
+"""
+                
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=reminder_text,
+                    parse_mode="HTML"
+                )
+                sent_count += 1
+                
+            except Exception as e:
+                logger.debug(f"Could not send reminder to user {participant.get('user_id')}: {e}")
+        
+        logger.info(f"Challenge payment reminders sent to {sent_count} users")
+    
+    except Exception as e:
+        logger.error(f"Error in send_challenge_payment_reminders: {e}")
+
+
+def get_weekly_checkin_count(user_id: int) -> int:
+    """
+    Get user's check-in count for current week
+    Helper function for daily processing
+    """
+    try:
+        from src.database.connection import DatabaseConnection
+        db = DatabaseConnection()
+        
+        query = """
+            SELECT COUNT(*) as count
+            FROM attendance_queue
+            WHERE user_id = %s
+            AND status = 'approved'
+            AND approved_at >= DATE_TRUNC('week', CURRENT_DATE)
+            AND approved_at < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '7 days'
+        """
+        
+        result = db.execute_query(query, (user_id,))
+        return result['count'] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting weekly check-in count: {e}")
+        return 0

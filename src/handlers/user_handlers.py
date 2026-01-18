@@ -16,6 +16,7 @@ from src.utils.guards import check_registration, check_approval
 from src.database.subscription_operations import (
     get_user_subscription, is_subscription_active, is_in_grace_period
 )
+from src.utils.callback_utils import safe_answer_callback_query
 
 logger = logging.getLogger(__name__)
 
@@ -199,22 +200,32 @@ async def handle_location_for_checkin(update: Update, context: ContextTypes.DEFA
         except Exception:
             pass
         await message.reply_text("✅ Attendance logged. Awaiting approval.", reply_markup=ReplyKeyboardRemove())
-        # Notify moderators for manual approval
+        # Notify moderators for manual approval with instant buttons
         attendance_id = created.get('attendance_id')
+        user_phone = user.get('phone', 'N/A')
+        
         for chat_id in get_moderator_chat_ids(include_staff=True):
             try:
+                notification_text = (
+                    "🔔 *NEW GYM CHECK-IN REQUEST*\n\n"
+                    f"👤 *User:* {user['full_name']}\n"
+                    f"📱 *ID:* {user_id}\n"
+                    f"📞 *Phone:* {user_phone}\n"
+                    f"📅 *Date:* {created.get('request_date')}\n"
+                    f"🏢 *Attendance ID:* {attendance_id}\n\n"
+                    "⏳ *Status:* PENDING YOUR APPROVAL\n\n"
+                    "Click buttons below to approve or reject:"
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ Approve", callback_data=f"approve_attend_{attendance_id}"),
+                     InlineKeyboardButton("❌ Reject", callback_data=f"reject_attend_{attendance_id}")],
+                ]
+                
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=(
-                        "🔔 *New Attendance Request*\n\n"
-                        f"User: {user['full_name']}\n"
-                        f"ID: `{user_id}`\n"
-                        f"Attendance ID: {attendance_id}\n\n"
-                        "Use Pending Attendance to review."
-                    ),
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✔️ Pending Attendance", callback_data="cmd_pending_attendance")]
-                    ]),
+                    text=notification_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
             except Exception as e:
@@ -223,20 +234,31 @@ async def handle_location_for_checkin(update: Update, context: ContextTypes.DEFA
 
     await message.reply_text("📝 Attendance recorded. Pending approval (membership inactive).", reply_markup=ReplyKeyboardRemove())
     attendance_id = created.get('attendance_id')
+    user_phone = user.get('phone', 'N/A')
+    
     for chat_id in get_moderator_chat_ids(include_staff=True):
         try:
+            notification_text = (
+                "🔔 *NEW GYM CHECK-IN REQUEST (INACTIVE)*\n\n"
+                f"👤 *User:* {user['full_name']}\n"
+                f"📱 *ID:* {user_id}\n"
+                f"📞 *Phone:* {user_phone}\n"
+                f"📅 *Date:* {created.get('request_date')}\n"
+                f"🏢 *Attendance ID:* {attendance_id}\n\n"
+                "⚠️ *Note:* User has inactive/expired membership\n"
+                "⏳ *Status:* PENDING YOUR APPROVAL\n\n"
+                "Click buttons below to approve or reject:"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("✅ Approve", callback_data=f"approve_attend_{attendance_id}"),
+                 InlineKeyboardButton("❌ Reject", callback_data=f"reject_attend_{attendance_id}")],
+            ]
+            
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    "🔔 *New Attendance Request*\n\n"
-                    f"User: {user['full_name']}\n"
-                    f"ID: `{user_id}`\n"
-                    f"Attendance ID: {attendance_id}\n\n"
-                    "Use Pending Attendance to review."
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✔️ Pending Attendance", callback_data="cmd_pending_attendance")]
-                ]),
+                text=notification_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
         except Exception as e:
@@ -606,7 +628,7 @@ async def cmd_studio_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show studio rules and regulations"""
     # Handle both command and callback contexts
     if update.callback_query:
-        await update.callback_query.answer()
+        await safe_answer_callback_query(update)
         message = update.callback_query.message
     else:
         message = update.message

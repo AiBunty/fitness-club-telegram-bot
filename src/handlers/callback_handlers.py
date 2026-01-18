@@ -6,7 +6,9 @@ from src.database.attendance_operations import get_user_attendance_today
 from src.database.shake_operations import get_shake_flavors, request_shake
 from src.database.user_operations import get_user
 from src.utils.role_notifications import get_moderator_chat_ids
-from src.utils.auth import is_admin_id, is_staff, is_fee_paid, check_user_approved
+from src.utils.auth import is_admin_id, is_staff, check_user_approved
+from src.utils.role_notifications import get_moderator_chat_ids
+from src.database.user_operations import get_user
 from src.database.shake_credits_operations import (
     approve_purchase, reject_purchase, get_pending_purchase_requests, get_user_credits
 )
@@ -61,15 +63,6 @@ async def verify_fee_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"[APPROVAL] User {user_id} attempted activity without approval")
         await query.answer(
             "⏳ Registration pending approval. Contact admin.",
-            show_alert=True
-        )
-        return False
-    
-    # Then check fee
-    if not is_fee_paid(user_id):
-        logger.info(f"[FEE] User {user_id} attempted activity without paid fee")
-        await query.answer(
-            "❌ Membership fee not paid! Please pay to access features.",
             show_alert=True
         )
         return False
@@ -320,7 +313,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         cmd_list_staff, cmd_add_admin, cmd_remove_admin, cmd_list_admins,
         cmd_list_users, cmd_delete_user, cmd_ban_user, cmd_unban_user
     )
-    from src.handlers.payment_handlers import cmd_payment_status, cmd_challenges
+    from src.handlers.payment_handlers import cmd_challenges
     from src.handlers.challenge_handlers import cmd_my_challenges
     from src.handlers.analytics_handlers import cmd_admin_dashboard
     from src.handlers.notification_handlers import cmd_notifications
@@ -328,16 +321,22 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     from src.handlers.payment_request_handlers import cmd_pending_requests
     from src.handlers.shake_credit_handlers import (
         cmd_buy_shake_credits, cmd_check_shake_credits, cmd_shake_report,
-        cmd_admin_pending_purchases, process_shake_order
+        cmd_admin_pending_purchases, process_shake_order,
+        callback_confirm_buy_credits, callback_select_shake_payment,
+        callback_approve_shake_purchase, callback_reject_shake_purchase
     )
     from src.handlers.shake_order_handlers import (
         cmd_order_shake_enhanced, process_shake_flavor_selection, confirm_shake_order,
         admin_approve_shake, admin_complete_shake
     )
+    from src.handlers.commerce_hub_handlers import (
+        cmd_manage_subscriptions, cmd_manage_store, cmd_manage_pt_plans, cmd_manage_events,
+        handle_commerce_callbacks, cmd_user_store
+    )
     from src.handlers.role_keyboard_handlers import show_role_menu
     
     query = update.callback_query
-    logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id}")
+    logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id} - Chat ID: {query.message.chat_id if query.message else 'NO MESSAGE'}")
     
     # Try to answer callback, but handle old/expired queries gracefully
     try:
@@ -372,6 +371,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_points_chart(update, context)
     elif query.data == "cmd_studio_rules":
         await cmd_studio_rules(update, context)
+    elif query.data == "cmd_user_store":
+        await cmd_user_store(update, context)
     elif query.data == "cmd_check_shake_credits":
         await cmd_check_shake_credits(update, context)
     elif query.data == "cmd_order_shake":
@@ -386,6 +387,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await admin_complete_shake(update, context)
     elif query.data == "cmd_buy_shake_credits":
         await cmd_buy_shake_credits(update, context)
+    elif query.data == "confirm_buy_25":
+        await callback_confirm_buy_credits(update, context)
+    elif query.data.startswith("shake_pay_"):
+        await callback_select_shake_payment(update, context)
+    elif query.data.startswith("approve_shake_purchase_"):
+        await callback_approve_shake_purchase(update, context)
+    elif query.data.startswith("reject_shake_purchase_"):
+        await callback_reject_shake_purchase(update, context)
     elif query.data == "cmd_shake_report":
         await cmd_shake_report(update, context)
     elif query.data == "cmd_pending_shake_purchases":
@@ -400,8 +409,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_pending_shakes(update, context)
     elif query.data == "cmd_admin_dashboard":
         await cmd_admin_dashboard(update, context)
-    elif query.data == "cmd_payment_status":
-        await cmd_payment_status(update, context)
     elif query.data == "cmd_add_staff":
         await cmd_add_staff(update, context)
     elif query.data == "cmd_remove_staff":
@@ -456,6 +463,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 f"Our admin will verify your payment and transfer credits soon.",
                 parse_mode='Markdown'
             )
+
+            # Notify all admins immediately with approve/reject buttons
+            admin_ids = get_moderator_chat_ids(include_staff=False)
+            user_info = get_user(user_id) or {}
+            notif_text = (
+                f"💳 *Shake Credit Purchase Request*\n\n"
+                f"👤 User: {user_info.get('full_name', 'Unknown')}\n"
+                f"📱 @{user_info.get('telegram_username') or 'unknown'}\n"
+                f"🥤 Credits: {credits}\n"
+                f"💵 Amount: Rs {purchase['amount']}\n"
+                f"📅 Requested: {purchase['created_at'].strftime('%d-%m-%Y %H:%M')}\n"
+            )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Approve", callback_data=f"approve_purchase_{purchase['purchase_id']}")],
+                [InlineKeyboardButton("❌ Reject", callback_data=f"reject_purchase_{purchase['purchase_id']}")],
+            ])
+            for admin_id in admin_ids:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=notif_text,
+                        reply_markup=keyboard,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id} about purchase {purchase['purchase_id']}: {e}")
         else:
             await query.answer("❌ Failed to create purchase request", show_alert=True)
     elif query.data.startswith("approve_purchase_"):
@@ -543,6 +576,195 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         else:
             await query.answer("❌ Failed to place order. Check your credits.", show_alert=True)
+    elif query.data.startswith("shake_paid_"):
+        # Admin marks shake order as PAID
+        shake_id = int(query.data.split("_")[-1])
+        admin_id = query.from_user.id
+        
+        if not is_admin_id(admin_id):
+            await query.answer("❌ Admin access only.", show_alert=True)
+            return
+        
+        try:
+            from src.database.shake_operations import mark_shake_paid
+            result = mark_shake_paid(shake_id, admin_id)
+            
+            if result:
+                user_id = result.get('user_id')
+                flavor_name = result.get('flavor_name', f"Flavor #{result.get('flavor_id')}")
+                
+                # Notify user that order is approved (paid path)
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ *Your Shake Order is Approved - PAID*\n\n"
+                             f"🥤 *{flavor_name}*\n"
+                             f"💵 *Status:* PAID\n"
+                             f"📋 *Request ID:* #{shake_id}\n\n"
+                             f"Your shake is being prepared and ready for pickup soon! 🎉",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify user {user_id}: {e}")
+                
+                # Confirm to admin
+                await query.answer("✅ Shake marked as PAID - order approved!", show_alert=False)
+                await query.edit_message_text(
+                    text=f"✅ *SHAKE ORDER - PAID*\n\n"
+                         f"Order #{shake_id} marked as PAID and approved.\n"
+                         f"User will be notified.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.answer("❌ Failed to mark shake as paid", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error processing shake_paid: {e}")
+            await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+    
+    elif query.data.startswith("shake_credit_terms_"):
+        # Admin chooses CREDIT TERMS for shake order
+        shake_id = int(query.data.split("_")[-1])
+        admin_id = query.from_user.id
+        
+        if not is_admin_id(admin_id):
+            await query.answer("❌ Admin access only.", show_alert=True)
+            return
+        
+        try:
+            from src.database.shake_operations import mark_shake_credit_terms
+            result = mark_shake_credit_terms(shake_id, admin_id)
+            
+            if result:
+                user_id = result.get('user_id')
+                flavor_name = result.get('flavor_name', f"Flavor #{result.get('flavor_id')}")
+                
+                # Notify user that order is on credit terms with payment reminder
+                try:
+                    keyboard = [
+                        [InlineKeyboardButton("✅ Mark as Paid", callback_data=f"user_paid_shake_{shake_id}")],
+                    ]
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ *Your Shake Order is Approved - CREDIT TERMS*\n\n"
+                             f"🥤 *{flavor_name}*\n"
+                             f"📋 *Payment Terms:* Credit\n"
+                             f"📋 *Request ID:* #{shake_id}\n\n"
+                             f"💳 *Payment Due:* Within 7 days\n"
+                             f"📱 *You will receive payment reminders*\n\n"
+                             f"Your shake is being prepared for pickup! 🎉",
+                        parse_mode='Markdown',
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify user {user_id}: {e}")
+                
+                # Confirm to admin
+                await query.answer("✅ Shake set to CREDIT TERMS - reminders will start", show_alert=False)
+                await query.edit_message_text(
+                    text=f"✅ *SHAKE ORDER - CREDIT TERMS*\n\n"
+                         f"Order #{shake_id} approved with credit terms.\n"
+                         f"Automatic payment reminders will be sent to user.\n"
+                         f"User notified.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.answer("❌ Failed to set credit terms", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error processing shake_credit_terms: {e}")
+            await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+    
+    elif query.data.startswith("user_paid_shake_"):
+        # User confirms payment for credit-based shake order
+        shake_id = int(query.data.split("_")[-1])
+        user_id = query.from_user.id
+        
+        try:
+            from src.database.shake_operations import mark_user_paid_for_shake
+            result = mark_user_paid_for_shake(shake_id, user_id)
+            
+            if result:
+                # Notify admins that user confirmed payment
+                admin_text = (
+                    f"🔔 *USER PAYMENT CONFIRMATION*\n\n"
+                    f"👤 *User:* {get_user(user_id)['full_name']}\n"
+                    f"📱 *ID:* {user_id}\n"
+                    f"📋 *Shake Request ID:* #{shake_id}\n\n"
+                    f"✅ User has confirmed payment for their credit-based shake order.\n\n"
+                    f"*ACTION:* Please review and approve final payment if needed."
+                )
+                
+                try:
+                    admin_ids = get_moderator_chat_ids()
+                    for admin_id in admin_ids:
+                        try:
+                            keyboard = [
+                                [InlineKeyboardButton("✅ Approve Payment", callback_data=f"admin_approve_user_payment_{shake_id}")],
+                            ]
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=admin_text,
+                                reply_markup=InlineKeyboardMarkup(keyboard),
+                                parse_mode='Markdown'
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to notify admin {admin_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to get admin IDs: {e}")
+                
+                # Confirm to user
+                await query.answer("✅ Payment confirmation sent to admin", show_alert=False)
+                await query.edit_message_text(
+                    text=f"✅ *Payment Confirmed*\n\n"
+                         f"Your payment for order #{shake_id} has been confirmed.\n"
+                         f"Admins will review and approve shortly. ⏳",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.answer("❌ Failed to confirm payment", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error processing user_paid_shake: {e}")
+            await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+    
+    elif query.data.startswith("admin_approve_user_payment_"):
+        # Admin approves user's payment confirmation
+        shake_id = int(query.data.split("_")[-1])
+        admin_id = query.from_user.id
+        
+        if not is_admin_id(admin_id):
+            await query.answer("❌ Admin access only.", show_alert=True)
+            return
+        
+        try:
+            from src.database.shake_operations import approve_user_payment
+            result = approve_user_payment(shake_id, admin_id)
+            
+            if result:
+                user_id = result.get('user_id')
+                
+                # Notify user that payment is approved
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ *Payment Approved!*\n\n"
+                             f"Your payment for order #{shake_id} has been approved by admin.\n"
+                             f"Thank you! 🙏",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify user {user_id}: {e}")
+                
+                await query.answer("✅ Payment approved", show_alert=False)
+                await query.edit_message_text(
+                    text=f"✅ *USER PAYMENT APPROVED*\n\n"
+                         f"Order #{shake_id} payment confirmed and approved.\n"
+                         f"No further reminders will be sent.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.answer("❌ Failed to approve payment", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error processing admin_approve_user_payment: {e}")
+            await query.answer(f"❌ Error: {str(e)}", show_alert=True)
     # Legacy callbacks
     elif query.data == "stats":
         await callback_stats(update, context)
@@ -560,5 +782,31 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await callback_settings(update, context)
     elif query.data == "main_menu":
         await callback_main_menu(update, context)
+    elif query.data == "edit_weight":
+        # User wants to edit their weight for today
+        await query.answer()
+        from src.database.activity_operations import get_today_weight
+        from src.handlers.activity_handlers import WEIGHT_VALUE
+        
+        user_id = query.from_user.id
+        current_weight = get_today_weight(user_id)
+        
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
+        await query.message.reply_text(
+            f"✏️ *Edit Your Weight*\n\n"
+            f"Current Weight: {current_weight} kg\n\n"
+            f"Enter your new weight in kg (e.g., 76.5):",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        logger.info(f"[WEIGHT_EDIT] User {user_id} started editing weight. Current: {current_weight}kg")
+        return WEIGHT_VALUE
+    elif query.data == "cancel":
+        await query.answer()
+        await query.message.reply_text("❌ Cancelled.")
+    # Commerce hub callbacks
+    elif query.data.startswith("store_") or query.data.startswith("sub_") or \
+         query.data.startswith("pt_") or query.data.startswith("event_"):
+        await handle_commerce_callbacks(update, context)
     else:
         pass

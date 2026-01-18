@@ -35,6 +35,9 @@ def get_user(user_id: int):
     query = "SELECT * FROM users WHERE user_id = %s"
     return execute_query(query, (user_id,), fetch_one=True)
 
+# Alias for compatibility
+get_user_by_id = get_user
+
 def get_all_users():
     """Get all registered users"""
     query = """
