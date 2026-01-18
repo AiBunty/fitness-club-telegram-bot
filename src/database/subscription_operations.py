@@ -219,6 +219,13 @@ def approve_subscription(request_id: int, amount: int, end_date: datetime) -> bo
                 (user_id, plan_id, amount, start_date, end_date, end_date + timedelta(days=7), start_date),
             )
         
+        # Update user fee_status to 'paid' when subscription is approved
+        execute_query(
+            "UPDATE users SET fee_status = 'paid', fee_paid_date = CURRENT_TIMESTAMP WHERE user_id = %s",
+            (user_id,),
+        )
+        logger.info(f"User {user_id} fee_status updated to 'paid' on subscription approval")
+        
         logger.info(f"Subscription approved for user {user_id}: Amount {amount}, End Date {end_date}")
         return True
         

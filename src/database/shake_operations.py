@@ -223,7 +223,14 @@ def approve_user_payment(shake_id: int, admin_id: int):
         """
         result = execute_query(query, (admin_id, shake_id), fetch_one=True)
         if result:
+            user_id = result.get('user_id')
+            # Update user fee_status to 'paid' when payment is approved
+            execute_query(
+                "UPDATE users SET fee_status = 'paid', fee_paid_date = CURRENT_TIMESTAMP WHERE user_id = %s",
+                (user_id,),
+            )
             logger.info(f"Admin {admin_id} approved user payment for shake {shake_id}")
+            logger.info(f"User {user_id} fee_status updated to 'paid' on shake payment approval")
         return result
     except Exception as e:
         logger.error(f"Failed to approve user payment: {e}")

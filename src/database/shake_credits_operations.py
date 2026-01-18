@@ -298,6 +298,16 @@ def approve_purchase(purchase_id: int, admin_user_id: int, amount_paid: float = 
         """
         execute_query(query_update, (admin_user_id, final_amount_paid, purchase_id))
         
+        # Update user fee_status to 'paid' when payment is approved
+        # If amount_paid is 0 or not provided, it's a credit sale - still mark as paid but trigger follow-up
+        query_update_user = """
+            UPDATE users
+            SET fee_status = 'paid', fee_paid_date = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        """
+        execute_query(query_update_user, (user_id,))
+        logger.info(f"User {user_id} fee_status updated to 'paid' on shake credit approval")
+        
         # Add credits to user
         add_credits(user_id, credits, 'purchase', f"Purchased {credits} credits for Rs {amount}")
         
@@ -335,6 +345,11 @@ def approve_purchase(purchase_id: int, admin_user_id: int, amount_paid: float = 
                 logger.info(f"AR receivable {receivable['receivable_id']} created for shake purchase {purchase_id}")
         except Exception as ar_err:
             logger.error(f"Failed to create AR receivable for shake purchase {purchase_id}: {ar_err}")
+        
+        # If amount_paid is 0 or less, it's a credit sale - create follow-up for payment collection
+        if final_amount_paid <= 0:
+            followup_result = create_credit_sale_followup(user_id, purchase_id, amount)
+            logger.info(f"Credit sale follow-up: {followup_result}")
         
         logger.info(f"Purchase {purchase_id} approved by admin {admin_user_id}. {credits} credits transferred to user {user_id}")
         
@@ -431,3 +446,47 @@ def get_all_user_reports() -> list:
     except Exception as e:
         logger.error(f"Failed to get all user reports: {e}")
         return []
+
+
+def create_credit_sale_followup(user_id: int, purchase_id: int, original_amount: float) -> dict:
+    """
+    Create payment follow-up for credit sales (0 amount approved purchases)
+    This is called when amount_paid is 0 to trigger payment collection reminder
+    Logs the credit sale for admin follow-up
+    
+    Args:
+        user_id: User ID
+        purchase_id: Purchase request ID
+        original_amount: Original amount due
+    
+    Returns:
+        dict with followup status
+    """
+    try:
+        # Log credit sale for admin follow-up
+        logger.warning(f"[CREDIT SALE] User {user_id}: Purchase {purchase_id} approved for Rs {original_amount} with 0 payment")
+        logger.warning(f"[PAYMENT FOLLOWUP REQUIRED] User {user_id} owes Rs {original_amount} for shake credit purchase #{purchase_id}")
+        
+        # Try to create notification if the column exists
+        try:
+            from src.database.notifications_operations import create_notification
+            create_notification(
+                user_id=user_id,
+                notification_type='payment_followup',
+                title=f'Payment Follow-up: Shake Credits',
+                link_data=f'shake_purchase_{purchase_id}'
+            )
+        except Exception as notif_err:
+            logger.debug(f"Could not create notification: {notif_err}")
+        
+        return {
+            'success': True,
+            'followup_type': 'credit_sale',
+            'message': f'Payment follow-up created for credit sale: Rs {original_amount}'
+        }
+    except Exception as e:
+        logger.error(f"Failed to create credit sale follow-up for user {user_id}: {e}")
+        return {
+            'success': False,
+            'message': str(e)
+        }
