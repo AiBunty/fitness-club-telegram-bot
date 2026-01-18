@@ -153,6 +153,20 @@ CREATE INDEX IF NOT EXISTS idx_meal_photos_user ON meal_photos(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_fee_payments_user ON fee_payments(user_id);
 
+-- Attendance Overrides Table (QR system manual overrides)
+CREATE TABLE IF NOT EXISTS attendance_overrides (
+    override_id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    admin_id BIGINT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_attendance_overrides_user ON attendance_overrides(user_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_overrides_admin ON attendance_overrides(admin_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_overrides_date ON attendance_overrides(created_at);
+
 -- Create Leaderboard View
 CREATE OR REPLACE VIEW leaderboard AS
 SELECT 

@@ -1131,3 +1131,216 @@ def get_manual_shake_deduction_handler():
         },
         fallbacks=[CommandHandler('cancel', cancel_registration)]
     )
+
+
+# ================================================================
+# QR ATTENDANCE SYSTEM
+# ================================================================
+
+async def cmd_qr_attendance_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send QR attendance link to user
+    Usage: /qr_attendance_link
+    """
+    if not is_admin_id(update.effective_user.id):
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    
+    try:
+        # Get user from context or prompt for it
+        if context.args and len(context.args) > 0:
+            try:
+                target_user_id = int(context.args[0])
+            except ValueError:
+                await update.message.reply_text("❌ Invalid user ID. Usage: /qr_attendance_link {user_id}")
+                return
+        else:
+            await update.message.reply_text("❌ Usage: /qr_attendance_link {user_id}")
+            return
+        
+        # Generate QR attendance link
+        # Format: http://your-bot-url:5000/qr/attendance?user_id=123456
+        link = f"🔗 <b>QR Attendance Link</b>\n\n"
+        link += f"Send this link to user {target_user_id}:\n\n"
+        link += f"<code>http://your-domain:5000/qr/attendance?user_id={target_user_id}</code>\n\n"
+        link += f"<i>User scans QR code, grants GPS permission, marks attendance</i>"
+        
+        await update.message.reply_text(link, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"Error generating QR attendance link: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def cmd_override_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Override attendance for user without QR/geofence
+    Usage: /override_attendance {user_id} {reason}
+    """
+    if not is_admin_id(update.effective_user.id):
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    
+    try:
+        # Parse arguments: user_id and reason
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Usage: /override_attendance {user_id} {reason}\n\n"
+                "Example: /override_attendance 123456 Location issue"
+            )
+            return
+        
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID")
+            return
+        
+        reason = ' '.join(context.args[1:])
+        if not reason:
+            await update.message.reply_text("❌ Reason is mandatory")
+            return
+        
+        admin_id = update.effective_user.id
+        
+        # Check if user exists
+        from src.database.user_operations import get_user
+        user = get_user(target_user_id)
+        if not user:
+            await update.message.reply_text(f"❌ User {target_user_id} not found")
+            return
+        
+        # Check for duplicate attendance today
+        from src.database.attendance_operations import check_duplicate_attendance
+        if check_duplicate_attendance(target_user_id):
+            await update.message.reply_text(f"❌ User already marked attendance today")
+            return
+        
+        # Create attendance record
+        from src.database.attendance_operations import create_attendance_request
+        request_id = create_attendance_request(target_user_id, 'ADMIN_OVERRIDE', reason)
+        
+        # Log the override
+        from src.database.connection import execute_query
+        override_query = """
+            INSERT INTO attendance_overrides (user_id, admin_id, reason, created_at)
+            VALUES (%s, %s, %s, NOW())
+        """
+        execute_query(override_query, (target_user_id, admin_id, reason))
+        
+        user_name = user.get('first_name', 'Unknown')
+        
+        # Notify admin
+        await update.message.reply_text(
+            f"✅ <b>Attendance Overridden</b>\n\n"
+            f"👤 Member: {user_name}\n"
+            f"📝 Reason: {reason}\n"
+            f"🆔 Request ID: {request_id}",
+            parse_mode='HTML'
+        )
+        
+        # Queue notification to other admins
+        from src.utils.admin_notifications import queue_admin_notification
+        queue_admin_notification(
+            'admin_override',
+            user_id=target_user_id,
+            admin_id=admin_id,
+            reason=reason
+        )
+        
+        logger.info(f"Admin {admin_id} overrode attendance for user {target_user_id}: {reason}")
+        
+    except Exception as e:
+        logger.error(f"Error overriding attendance: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def cmd_download_qr_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Download QR code as A4 PDF for gym location
+    Usage: /download_qr_code
+    """
+    if not is_admin_id(update.effective_user.id):
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    
+    try:
+        # Import libraries
+        import io
+        import qrcode
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        
+        # Create QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        
+        # QR code data: link to attendance page for generic use
+        qr_data = "http://your-domain:5000/qr/attendance"
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        
+        # Create QR image
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Create PDF
+        pdf_buffer = io.BytesIO()
+        c = canvas.Canvas(pdf_buffer, pagesize=A4)
+        
+        # Write title
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(50, A4[1] - 50, "🏋️ Gym Attendance Check-In")
+        
+        # Location info
+        c.setFont("Helvetica", 12)
+        c.drawString(50, A4[1] - 100, "📍 Location: Main Gym")
+        c.drawString(50, A4[1] - 125, "Coordinates: 19.996429, 73.754282")
+        
+        # Instructions
+        c.setFont("Helvetica", 10)
+        c.drawString(50, A4[1] - 170, "Instructions:")
+        c.drawString(60, A4[1] - 190, "1. Use your phone to scan this QR code")
+        c.drawString(60, A4[1] - 210, "2. Grant location permission when prompted")
+        c.drawString(60, A4[1] - 230, "3. Click 'Start Check-In' button")
+        c.drawString(60, A4[1] - 250, "4. Attendance will be marked automatically")
+        
+        # Add QR code image to PDF (centered horizontally, positioned vertically)
+        qr_img_buffer = io.BytesIO()
+        qr_img.save(qr_img_buffer, format='PNG')
+        qr_img_buffer.seek(0)
+        
+        # Draw QR code in center of page
+        qr_size = 300  # pixels
+        x_center = (A4[0] - qr_size) / 2
+        y_center = A4[1] / 2 - 100
+        
+        c.drawImage(io.BytesIO(qr_img_buffer.getvalue()), x_center, y_center, width=qr_size, height=qr_size)
+        
+        # Footer
+        c.setFont("Helvetica", 9)
+        c.drawString(50, 30, "Generated for: Main Gym | Valid for all members")
+        
+        c.save()
+        
+        # Send PDF to admin
+        pdf_buffer.seek(0)
+        await update.message.reply_document(
+            document=pdf_buffer,
+            filename="gym_attendance_qr.pdf",
+            caption="🎯 Print this A4 QR code and display at gym entrance"
+        )
+        
+        logger.info(f"QR code PDF downloaded by admin {update.effective_user.id}")
+        
+    except ImportError:
+        logger.warning("qrcode or reportlab not installed")
+        await update.message.reply_text(
+            "❌ QR code generation not available\n\n"
+            "Install required packages:\n"
+            "<code>pip install qrcode[pil] reportlab</code>",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Error generating QR code PDF: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")

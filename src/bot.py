@@ -39,7 +39,8 @@ from src.handlers.admin_handlers import (
     cmd_add_staff, cmd_remove_staff, cmd_list_staff, handle_staff_id_input,
     cmd_add_admin, cmd_remove_admin, cmd_list_admins,
     callback_approve_user, callback_reject_user, cmd_pending_users,
-    cmd_manual_shake_deduction, get_manual_shake_deduction_handler
+    cmd_manual_shake_deduction, get_manual_shake_deduction_handler,
+    cmd_qr_attendance_link, cmd_override_attendance, cmd_download_qr_code
 )
 from src.handlers.analytics_handlers import (
     cmd_admin_dashboard, handle_analytics_callback,
@@ -386,6 +387,11 @@ def main():
     application.add_handler(CommandHandler('list_admins', cmd_list_admins))
     application.add_handler(get_manual_shake_deduction_handler())  # Manual shake deduction
     
+    # QR Attendance handlers
+    application.add_handler(CommandHandler('qr_attendance_link', cmd_qr_attendance_link))
+    application.add_handler(CommandHandler('override_attendance', cmd_override_attendance))
+    application.add_handler(CommandHandler('download_qr_code', cmd_download_qr_code))
+    
     # NEW: Enhanced Admin Panel Handlers - MUST be BEFORE numeric handlers
     application.add_handler(CommandHandler('admin_panel', cmd_admin_panel))
     application.add_handler(get_manage_users_conversation_handler())
@@ -635,6 +641,47 @@ def main():
         logger.error(f"An error occurred: {context.error}", exc_info=context.error)
     
     application.add_error_handler(error_handler)
+    
+    # ================================================================
+    # FLASK WEB SERVER FOR QR ATTENDANCE
+    # ================================================================
+    # Start Flask web server on main thread (waitress WSGI server)
+    # This allows QR attendance endpoints while polling continues
+    try:
+        import threading
+        import time
+        from src.web.app import create_app
+        from waitress import serve
+        from src.utils.admin_notifications import set_telegram_app
+        
+        # Set telegram app reference for admin notifications
+        set_telegram_app(application)
+        logger.info("Telegram app reference set for admin notifications")
+        
+        # Create Flask app
+        flask_app = create_app()
+        logger.info("Flask app created for QR attendance")
+        
+        # Start Flask on separate thread using waitress
+        def run_flask():
+            logger.info("Starting Flask web server on :5000...")
+            try:
+                serve(flask_app, host='0.0.0.0', port=5000, _quiet=True)
+            except Exception as e:
+                logger.error(f"Flask server error: {e}", exc_info=True)
+        
+        flask_thread = threading.Thread(target=run_flask, daemon=False)
+        flask_thread.start()
+        logger.info("Flask thread started")
+        
+        # Give Flask 1 second to start before polling
+        time.sleep(1)
+        
+    except ImportError:
+        logger.warning("Flask or waitress not installed - QR attendance disabled")
+    except Exception as e:
+        logger.error(f"Error starting Flask: {e}", exc_info=True)
+        logger.warning("Continuing bot without Flask web server")
     
     logger.info("Bot starting...")
     logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
