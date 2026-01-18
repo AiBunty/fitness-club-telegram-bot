@@ -1,7 +1,7 @@
+from datetime import time as dt_time
 import logging
 import sys
 import os
-from datetime import time
 from telegram import BotCommand, MenuButtonCommands
 from telegram.ext import (
     Application, 
@@ -530,7 +530,7 @@ def main():
     # Daily follow-up for inactive users at 9 AM
     job_queue.run_daily(
         send_followup_to_inactive_users,
-        time=time(hour=9, minute=0),  # 9:00 AM every day
+        time=dt_time(hour=9, minute=0),  # 9:00 AM every day
         name="inactive_user_followup"
     )
     logger.info("Scheduled daily follow-up job at 9:00 AM")
@@ -538,7 +538,7 @@ def main():
     # EOD Report at 23:55 (11:55 PM)
     job_queue.run_daily(
         send_eod_report,
-        time=time(hour=23, minute=55),  # 11:55 PM every day
+        time=dt_time(hour=23, minute=55),  # 11:55 PM every day
         name="eod_report"
     )
     logger.info("Scheduled EOD report at 23:55")
@@ -546,7 +546,7 @@ def main():
     # Check expired memberships at 00:01 (12:01 AM)
     job_queue.run_daily(
         check_expired_memberships,
-        time=time(hour=0, minute=1),  # 12:01 AM every day
+        time=dt_time(hour=0, minute=1),  # 12:01 AM every day
         name="check_expired_memberships"
     )
     logger.info("Scheduled expiry check at 00:01")
@@ -563,7 +563,7 @@ def main():
     # Weight reminder every morning at 6 AM
     job_queue.run_daily(
         send_weight_reminder_morning,
-        time=time(hour=6, minute=0),  # 6:00 AM every day
+        time=dt_time(hour=6, minute=0),  # 6:00 AM every day
         name="weight_reminder_morning"
     )
     logger.info("Scheduled morning weight reminder at 6:00 AM")
@@ -571,7 +571,7 @@ def main():
     # Habits reminder every evening at 8 PM
     job_queue.run_daily(
         send_habits_reminder_evening,
-        time=time(hour=20, minute=0),  # 8:00 PM every day
+        time=dt_time(hour=20, minute=0),  # 8:00 PM every day
         name="habits_reminder_evening"
     )
     logger.info("Scheduled evening habits reminder at 8:00 PM")
@@ -579,7 +579,7 @@ def main():
     # Shake credit payment reminders every day at 11 AM
     job_queue.run_daily(
         send_shake_credit_reminders,
-        time=time(hour=11, minute=0),  # 11:00 AM every day
+        time=dt_time(hour=11, minute=0),  # 11:00 AM every day
         name="shake_credit_payment_reminders"
     )
     logger.info("Scheduled shake credit payment reminders at 11:00 AM")
@@ -589,7 +589,7 @@ def main():
         from src.utils.scheduled_jobs import send_receivables_reminders
         job_queue.run_daily(
             send_receivables_reminders,
-            time=time(hour=11, minute=5),
+            time=dt_time(hour=11, minute=5),
             name="receivables_reminders"
         )
         logger.info("Scheduled receivables reminders at 11:05 AM")
@@ -599,7 +599,7 @@ def main():
     # Subscription expiry reminders at 9 AM
     job_queue.run_daily(
         lambda context: send_expiry_reminders(context.bot),
-        time=time(hour=9, minute=0),  # 9:00 AM every day
+        time=dt_time(hour=9, minute=0),  # 9:00 AM every day
         name="subscription_expiry_reminders"
     )
     logger.info("Scheduled subscription expiry reminders at 9:00 AM")
@@ -607,7 +607,7 @@ def main():
     # Grace period reminders at 10 AM
     job_queue.run_daily(
         lambda context: send_grace_period_reminders(context.bot),
-        time=time(hour=10, minute=0),  # 10:00 AM every day
+        time=dt_time(hour=10, minute=0),  # 10:00 AM every day
         name="grace_period_reminders"
     )
     logger.info("Scheduled grace period reminders at 10:00 AM")
@@ -624,7 +624,7 @@ def main():
     # Lock expired subscriptions at 00:05 (12:05 AM)
     job_queue.run_daily(
         lambda context: lock_expired_subscriptions(context.bot),
-        time=time(hour=0, minute=5),  # 12:05 AM every day
+        time=dt_time(hour=0, minute=5),  # 12:05 AM every day
         name="lock_expired_subscriptions"
     )
     logger.info("Scheduled expired subscription locking at 00:05")

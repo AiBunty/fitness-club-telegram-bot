@@ -164,8 +164,10 @@ async def send_water_reminder_hourly(context: ContextTypes.DEFAULT_TYPE):
 async def send_weight_reminder_morning(context: ContextTypes.DEFAULT_TYPE):
     """
     Send morning reminder at 9 AM to log weight
+    Respects user's enabled/disabled setting
     """
     try:
+        from src.database.reminder_operations import get_reminder_preferences
         logger.info("Sending morning weight reminders...")
         
         # Get all users with paid memberships
@@ -182,13 +184,31 @@ async def send_weight_reminder_morning(context: ContextTypes.DEFAULT_TYPE):
             "Use /weight to log your weight."
         )
         
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [
+            [
+                InlineKeyboardButton("⚖️ Log Weight", callback_data="cmd_weight"),
+                InlineKeyboardButton("⚙️ Reminder Settings", callback_data="cmd_reminders"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         sent_count = 0
         for user in paid_users:
             try:
+                # Check user's reminder preferences
+                prefs = get_reminder_preferences(user['user_id'])
+                
+                # Skip if weight reminders are disabled
+                if not prefs or not prefs.get('weight_reminder_enabled', True):
+                    logger.debug(f"Weight reminders disabled for user {user['user_id']}")
+                    continue
+                
                 await context.bot.send_message(
                     chat_id=user['user_id'],
                     text=reminder_text,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
                 )
                 sent_count += 1
             except Exception as e:
@@ -203,8 +223,10 @@ async def send_weight_reminder_morning(context: ContextTypes.DEFAULT_TYPE):
 async def send_habits_reminder_evening(context: ContextTypes.DEFAULT_TYPE):
     """
     Send evening reminder at 8 PM to log daily habits
+    Respects user's enabled/disabled setting
     """
     try:
+        from src.database.reminder_operations import get_reminder_preferences
         logger.info("Sending evening habits reminders...")
         
         # Get all users with paid memberships
@@ -221,13 +243,31 @@ async def send_habits_reminder_evening(context: ContextTypes.DEFAULT_TYPE):
             "Use /habits to log your habits for today."
         )
         
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Log Habits", callback_data="cmd_habits"),
+                InlineKeyboardButton("⚙️ Reminder Settings", callback_data="cmd_reminders"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         sent_count = 0
         for user in paid_users:
             try:
+                # Check user's reminder preferences
+                prefs = get_reminder_preferences(user['user_id'])
+                
+                # Skip if habits reminders are disabled
+                if not prefs or not prefs.get('habits_reminder_enabled', True):
+                    logger.debug(f"Habits reminders disabled for user {user['user_id']}")
+                    continue
+                
                 await context.bot.send_message(
                     chat_id=user['user_id'],
                     text=reminder_text,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
                 )
                 sent_count += 1
             except Exception as e:

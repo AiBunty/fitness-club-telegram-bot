@@ -576,6 +576,7 @@ def get_reminder_conversation_handler():
     return ConversationHandler(
         entry_points=[
             CommandHandler('reminders', cmd_reminders),
+            CallbackQueryHandler(cmd_reminders, pattern="^cmd_reminders$"),
         ],
         states={
             REMINDER_MENU: [
