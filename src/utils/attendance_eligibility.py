@@ -53,13 +53,39 @@ def check_attendance_eligibility(user_id: int) -> dict:
         # Check if in grace period
         if is_in_grace_period(user_id):
             logger.debug(f"User {user_id} is in grace period")
-            # TODO: Track grace usage (3 attempts, 3 days max)
-            # For MVP: Allow all grace period attempts
+            
+            # Get subscription to check grace period end date
+            from src.database.subscription_operations import get_user_subscription
+            sub = get_user_subscription(user_id)
+            
+            if sub and sub.get('grace_period_end'):
+                grace_period_end = sub['grace_period_end']
+                days_left = max(0, (grace_period_end - datetime.now()).days + 1)
+            else:
+                days_left = 3  # Default 3 days
+            
+            # Count attendances in grace period (last 7 days)
+            from src.database.connection import execute_query
+            grace_count = execute_query(
+                """
+                SELECT COUNT(*) as count FROM attendance_queue
+                WHERE user_id = %s 
+                AND request_date >= CURRENT_DATE - INTERVAL '7 days'
+                AND status IN ('approved', 'pending')
+                """,
+                (user_id,),
+                fetch_one=True
+            )
+            attendance_count = grace_count.get('count', 0) if grace_count else 0
+            attempts_left = max(0, 3 - attendance_count)
+            
+            logger.info(f"User {user_id} grace period: {days_left} days, {attempts_left} attempts left")
+            
             return {
                 'eligible': True,
                 'reason': 'GRACE_PERIOD_ACTIVE',
-                'grace_days_left': 3,
-                'grace_attempts_left': 3
+                'grace_days_left': days_left,
+                'grace_attempts_left': attempts_left
             }
         
         # Not eligible

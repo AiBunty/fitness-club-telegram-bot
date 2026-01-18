@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src.database.attendance_operations import (
@@ -1208,32 +1209,36 @@ async def cmd_override_attendance(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text(f"❌ User {target_user_id} not found")
             return
         
-        # Check for duplicate attendance today
+        # CRITICAL: Admin override MUST still enforce duplicate prevention (same day, only once)
         from src.database.attendance_operations import check_duplicate_attendance
         if check_duplicate_attendance(target_user_id):
-            await update.message.reply_text(f"❌ User already marked attendance today")
+            await update.message.reply_text(f"❌ User already marked attendance today (duplicate prevention enforced even for admin overrides)")
             return
         
-        # Create attendance record
-        from src.database.attendance_operations import create_attendance_request
-        request_id = create_attendance_request(target_user_id, 'ADMIN_OVERRIDE', reason)
-        
-        # Log the override
+        # CRITICAL: Log all override details for audit trail
+        # This helps detect repeated abuse of admin override for same user
         from src.database.connection import execute_query
-        override_query = """
+        override_audit_query = """
             INSERT INTO attendance_overrides (user_id, admin_id, reason, created_at)
             VALUES (%s, %s, %s, NOW())
         """
-        execute_query(override_query, (target_user_id, admin_id, reason))
+        override_result = execute_query(override_audit_query, (target_user_id, admin_id, reason), fetch_one=True)
+        
+        # Create attendance record
+        from src.database.attendance_operations import create_attendance_request
+        request_id = create_attendance_request(target_user_id, source='ADMIN_OVERRIDE', details=reason)
         
         user_name = user.get('first_name', 'Unknown')
         
-        # Notify admin
+        # Notify admin with explicit audit info
         await update.message.reply_text(
             f"✅ <b>Attendance Overridden</b>\n\n"
             f"👤 Member: {user_name}\n"
+            f"👨‍💼 Admin: {admin_id}\n"
             f"📝 Reason: {reason}\n"
-            f"🆔 Request ID: {request_id}",
+            f"🆔 Override ID: {override_result.get('override_id') if override_result else 'N/A'}\n"
+            f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"📌 Attendance ID: {request_id}",
             parse_mode='HTML'
         )
         

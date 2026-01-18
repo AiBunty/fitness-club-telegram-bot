@@ -373,10 +373,12 @@ def create_app():
             # Step 3: Check geofence
             # ================================================
             from src.utils.geofence import is_within_geofence
+            from src.config import GEOFENCE_LAT, GEOFENCE_LNG, GEOFENCE_RADIUS_M
             
-            GYM_LAT = 19.996429
-            GYM_LON = 73.754282
-            GEOFENCE_RADIUS = 20  # meters
+            # Use config values; fallback to defaults if not set
+            GYM_LAT = GEOFENCE_LAT or 19.996429
+            GYM_LON = GEOFENCE_LNG or 73.754282
+            GEOFENCE_RADIUS = GEOFENCE_RADIUS_M or 10  # default 10 meters
             
             is_within, distance = is_within_geofence(
                 user_lat, user_lon,
@@ -384,7 +386,7 @@ def create_app():
                 GEOFENCE_RADIUS
             )
             
-            logger.debug(f"User {user_id} distance from gym: {distance:.1f}m")
+            logger.debug(f"User {user_id} distance from gym: {distance:.1f}m (geofence: {GEOFENCE_RADIUS}m)")
             
             if not is_within:
                 logger.warning(f"User {user_id} outside geofence: {distance:.1f}m > {GEOFENCE_RADIUS}m")
@@ -411,7 +413,14 @@ def create_app():
             from src.database.attendance_operations import create_attendance_request
             
             try:
-                request_id = create_attendance_request(user_id, 'QR', None)
+                request_id = create_attendance_request(user_id, source='QR', details=None)
+                if not request_id:
+                    logger.error(f"Failed to create attendance for user {user_id}: database returned None")
+                    return jsonify({
+                        'success': False,
+                        'reason': 'DUPLICATE_DETECTED',
+                        'distance_m': round(distance, 1)
+                    }), 409
                 logger.info(f"Attendance created for user {user_id}: request_id={request_id}")
             except Exception as e:
                 logger.error(f"Failed to create attendance for user {user_id}: {e}")

@@ -5,21 +5,38 @@ from src.config import POINTS_CONFIG
 
 logger = logging.getLogger(__name__)
 
-def create_attendance_request(user_id: int, photo_url: str = None):
-    """Create an attendance request for today"""
+def create_attendance_request(user_id: int, source: str = 'manual', details: str = None) -> int:
+    """
+    Create an attendance request for today
+    CRITICAL: Database has UNIQUE(user_id, queue_date) constraint - prevents duplicate within day
+    
+    Args:
+        user_id: User ID
+        source: Source of attendance ('QR', 'ADMIN_OVERRIDE', 'manual', etc)
+        details: Optional details/reason (e.g., admin override reason)
+    
+    Returns:
+        queue_id if successful, None on error
+    """
     try:
         query = """
-            INSERT INTO attendance_queue (user_id, request_date, photo_url, status)
-            VALUES (%s, CURRENT_DATE, %s, 'pending')
-            ON CONFLICT (user_id, request_date) 
-            DO UPDATE SET photo_url = EXCLUDED.photo_url, status = 'pending'
-            RETURNING *
+            INSERT INTO attendance_queue (user_id, queue_date, status, approved_by, approved_at)
+            VALUES (%s, CURRENT_DATE, 'pending', NULL, NULL)
+            ON CONFLICT (user_id, queue_date) 
+            DO UPDATE SET status = 'pending'
+            RETURNING queue_id
         """
-        result = execute_query(query, (user_id, photo_url), fetch_one=True)
-        logger.info(f"Attendance request created for user {user_id}")
-        return result
+        result = execute_query(query, (user_id,), fetch_one=True)
+        
+        if result:
+            queue_id = result.get('queue_id')
+            logger.info(f"Attendance request created for user {user_id} from {source}: queue_id={queue_id}")
+            return queue_id
+        else:
+            logger.error(f"Failed to create attendance for user {user_id}")
+            return None
     except Exception as e:
-        logger.error(f"Failed to create attendance request: {e}")
+        logger.error(f"Failed to create attendance request for user {user_id}: {e}")
         return None
 
 def get_pending_attendance_requests(limit: int = 20):
@@ -118,6 +135,33 @@ def reject_attendance(attendance_id: int, admin_user_id: int, reason: str = ""):
     except Exception as e:
         logger.error(f"Failed to reject attendance: {e}")
         return None
+
+def check_duplicate_attendance(user_id: int) -> bool:
+    """
+    Atomic check for duplicate attendance on same day
+    CRITICAL: Must be called within verify endpoint BEFORE creating attendance
+    
+    Returns:
+        True if attendance already exists today, False otherwise
+    """
+    try:
+        query = """
+            SELECT 1 FROM attendance_queue 
+            WHERE user_id = %s AND request_date = CURRENT_DATE
+            LIMIT 1
+        """
+        result = execute_query(query, (user_id,), fetch_one=True)
+        has_attendance = result is not None
+        
+        if has_attendance:
+            logger.info(f"Duplicate attendance detected for user {user_id}")
+        
+        return has_attendance
+    except Exception as e:
+        logger.error(f"Error checking duplicate attendance for user {user_id}: {e}")
+        # FAIL SAFE: Deny on error to prevent double-marking
+        return True
+
 
 def get_user_attendance_today(user_id: int):
     """Check if user already requested attendance today"""
