@@ -2204,6 +2204,72 @@ async def handle_upi_screenshot_upload(update: Update, context: ContextTypes.DEF
         return ENTER_UPI_VERIFICATION
 
 
+async def callback_split_upi_upload_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt user to upload split payment UPI screenshot"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.message.reply_text(
+        "📸 *Upload UPI Payment Screenshot*\n\n"
+        "Please share the screenshot of your UPI payment confirmation.\n"
+        "This helps us verify your payment quickly.",
+        parse_mode="Markdown"
+    )
+    return ENTER_UPI_VERIFICATION
+
+
+async def callback_split_upi_skip_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Skip screenshot for split UPI payment"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    request_id = context.user_data.get('subscription_request_id')
+    plan = context.user_data.get('selected_plan')
+    transaction_ref = context.user_data.get('transaction_ref')
+    split_upi_amount = context.user_data.get('split_upi_amount')
+    split_cash_amount = context.user_data.get('split_cash_amount')
+    
+    if not request_id or not plan or not split_upi_amount or not split_cash_amount:
+        await query.message.reply_text("❌ Payment data not found")
+        return ConversationHandler.END
+    
+    from src.database.subscription_operations import (
+        create_split_payment_receivable, record_split_upi_payment
+    )
+    
+    # Create split receivable
+    split_result = create_split_payment_receivable(user_id, request_id, split_upi_amount, split_cash_amount)
+    if not split_result:
+        await query.message.reply_text("❌ Error creating split payment ledger. Please contact admin.")
+        return ConversationHandler.END
+    
+    # Record UPI payment
+    record_split_upi_payment(user_id, request_id, split_upi_amount, transaction_ref)
+    
+    keyboard = [
+        [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"✅ *Split Payment Submitted*\n\n"
+        f"Plan: {plan['name']}\n"
+        f"*Total Amount: Rs. {(split_upi_amount + split_cash_amount):,.0f}*\n\n"
+        f"*Payment Breakdown:*\n"
+        f"• UPI: Rs. {split_upi_amount:,.0f}\n"
+        f"• Cash: Rs. {split_cash_amount:,.0f}\n\n"
+        f"✅ UPI portion submitted for verification\n"
+        f"⏳ Admin will contact you for cash collection\n\n"
+        f"Thank you for your purchase! 🎉",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    
+    logger.info(f"Split payment UPI submitted (no screenshot): User {user_id}, Request {request_id}")
+    return ConversationHandler.END
+
+
 async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Skip screenshot and submit UPI payment"""
     query = update.callback_query
@@ -2524,6 +2590,8 @@ def get_subscription_conversation_handler():
                 CallbackQueryHandler(callback_cancel_subscription, pattern="^sub_cancel$"),
             ],
             ENTER_UPI_VERIFICATION: [
+                CallbackQueryHandler(callback_split_upi_upload_screenshot, pattern="^split_upi_upload_screenshot$"),
+                CallbackQueryHandler(callback_split_upi_skip_screenshot, pattern="^split_upi_skip_screenshot$"),
                 CallbackQueryHandler(callback_upi_upload_screenshot, pattern="^upi_upload_screenshot$"),
                 CallbackQueryHandler(callback_upi_skip_screenshot, pattern="^upi_skip_screenshot$"),
                 CallbackQueryHandler(callback_upi_submit_with_screenshot, pattern="^upi_submit_with_screenshot$"),
