@@ -1,6 +1,6 @@
-import pytest
+﻿import pytest
 from types import SimpleNamespace
-from src.utils.followup_manager import save_followups, load_followups
+from src.utils.followup_manager import save_followups
 from src.utils.event_dispatcher import schedule_followups
 
 
@@ -55,4 +55,3 @@ def test_schedule_followups_no_followups(tmp_path):
     # Ensure no followups exist for UNKNOWN_EVENT
     schedule_followups(app, chat_id=1, event_key='UNKNOWN_EVENT', context_vars={})
     assert len(app.job_queue.scheduled) == 0
-*** End Patch
