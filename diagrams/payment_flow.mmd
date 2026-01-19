@@ -1,0 +1,36 @@
+flowchart TD
+  U[User] --> Browse[Browse Store / Add to Cart]
+  Browse --> Checkout[Checkout → Select Payment Method]
+  Checkout --> CreateOrder[create_order() in `src/database/store_operations.py`]
+  CreateOrder --> DB[store_orders row created (payment_method, balance)]
+  DB --> NotifyAdmins[Notify admins (get_moderator_chat_ids) \n`src/handlers/store_user_handlers.py`]
+  
+  subgraph AdminPanel [Admin Actions]
+    direction TB
+    NotifyAdmins --> AdminOpen[Admin: Open Order (store_order_detail)]
+    AdminOpen -->|Record Payment| AdminRecord[Record payment UI\n`src/handlers/store_admin_handlers.py`]
+    AdminOpen -->|Set Credit Terms / Approve| AdminCredit[Mark as CREDIT TERMS / Approve Order]
+    AdminRecord --> ApplyPayment[apply_order_payment(order_id, amount)]
+    ApplyPayment --> CheckBalance{balance <= 0?}
+    CheckBalance -->|Yes| MarkPaid[Set payment_status = PAID]
+    CheckBalance -->|No| MarkPartial[Set payment_status = PARTIAL / CREDIT]
+    MarkPaid --> NotifyUserPaid[Notify user (payment recorded)]
+    MarkPartial --> NotifyUserPartial[Notify user (partial recorded / remaining)]
+    AdminCredit --> SetDue[Set payment_due_date, overdue_reminder_count=0]
+    AdminCredit --> NotifyUserCredit[Notify user (credit approved + terms)]
+  end
+
+  subgraph Scheduled [Scheduled Jobs / Reminders]
+    direction TB
+    ScheduledCheck[send_receivables_reminders / send_shake_credit_reminders\n`src/utils/scheduled_jobs.py`] --> FindOverdue[Query pending/overdue credit orders]
+    FindOverdue --> SendReminder[Send reminder to user with "Mark as Paid" button]
+    SendReminder -->|User clicks Mark as Paid| UserPaidCb[user_paid_shake_{id} callback → apply_order_payment()]
+    SendReminder --> IncrementCount[UPDATE overdue_reminder_count]
+    IncrementCount --> SkipIfMax{overdue_reminder_count >= MAX?}
+  end
+
+  %% final flows back to DB / admin closure
+  NotifyUserPaid --> DBUpdate1[order.balance updated; log payment]
+  NotifyUserPartial --> DBUpdate2[order.balance updated; log partial]
+  MarkPaid --> CloseOrder[Optionally Close Order (close_order) by admin]
+  CloseOrder --> Archive[Archive / reduce_stock / audit logs]

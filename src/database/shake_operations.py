@@ -244,7 +244,7 @@ def get_pending_credit_shake_orders():
             SELECT sr.*, u.full_name, u.user_id, sf.flavor_name
             FROM shake_requests sr
             JOIN users u ON sr.user_id = u.user_id
-            JOIN shake_flavors sf ON sr.flavor_id = sr.flavor_id
+            JOIN shake_flavors sf ON sf.flavor_id = sr.flavor_id
             WHERE sr.payment_terms = 'credit'
             AND sr.payment_status IN ('pending', 'user_confirmed')
             AND sr.payment_due_date <= CURRENT_DATE + INTERVAL '1 day'

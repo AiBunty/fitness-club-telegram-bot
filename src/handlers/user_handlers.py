@@ -392,24 +392,40 @@ async def get_profile_pic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             profile_pic_url=profile_pic_url
         )
 
-        # Success message - go to subscription without admin approval
-        await update.message.reply_text(
+        # Success message - send defensively (Markdown first, then plain text fallback)
+        user_confirmation_text_md = (
             "🎉 *Registration Successful!*\n\n"
             f"Name: {context.user_data['name']}\n"
             f"Referral Code: {result['referral_code']}\n\n"
             "Now let's get you subscribed to unlock full access!\n\n"
-            "Tap /subscribe to choose your subscription plan.",
-            parse_mode='Markdown'
+            "Tap /subscribe to choose your subscription plan."
         )
-        
-        # Forward profile photo and user details to all admins
+
+        user_confirmation_text_plain = (
+            "🎉 Registration Successful!\n\n"
+            f"Name: {context.user_data['name']}\n"
+            f"Referral Code: {result['referral_code']}\n\n"
+            "Now let's get you subscribed to unlock full access!\n\n"
+            "Tap /subscribe to choose your subscription plan."
+        )
+
+        try:
+            await update.message.reply_text(user_confirmation_text_md, parse_mode='Markdown')
+        except Exception as e:
+            logger.warning(f"Could not send Markdown registration reply to user {user_id}: {e} - sending plain text instead")
+            try:
+                await update.message.reply_text(user_confirmation_text_plain)
+            except Exception as e2:
+                logger.error(f"Failed to send any registration confirmation to user {user_id}: {e2}")
+
+        # Forward profile photo and user details to all admins (run regardless of user message success)
         try:
             from src.handlers.admin_handlers import get_admin_ids
             from datetime import datetime
-            
+
             admin_ids = get_admin_ids()
             logger.info(f"Profile saved: Found {len(admin_ids)} admins to notify")
-            
+
             admin_message = (
                 f"*👤 New Profile Registration*\n\n"
                 f"Name: {context.user_data['name']}\n"
@@ -423,7 +439,7 @@ async def get_profile_pic(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Registered: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
                 f"✅ Profile saved successfully!"
             )
-            
+
             if not admin_ids:
                 logger.warning("No admins found to notify about new profile")
             else:
@@ -441,17 +457,30 @@ async def get_profile_pic(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 logger.info(f"✅ Profile photo notification sent to admin {admin_id} for user {user_id}")
                             except Exception as pic_error:
                                 logger.debug(f"Could not send profile photo, sending text only: {pic_error}")
+                                try:
+                                    await context.bot.send_message(
+                                        chat_id=admin_id,
+                                        text=admin_message,
+                                        parse_mode="Markdown"
+                                    )
+                                except Exception:
+                                    # If Markdown fails for admin, send plain text
+                                    await context.bot.send_message(
+                                        chat_id=admin_id,
+                                        text=admin_message
+                                    )
+                        else:
+                            try:
                                 await context.bot.send_message(
                                     chat_id=admin_id,
                                     text=admin_message,
                                     parse_mode="Markdown"
                                 )
-                        else:
-                            await context.bot.send_message(
-                                chat_id=admin_id,
-                                text=admin_message,
-                                parse_mode="Markdown"
-                            )
+                            except Exception:
+                                await context.bot.send_message(
+                                    chat_id=admin_id,
+                                    text=admin_message
+                                )
                     except Exception as e:
                         logger.error(f"❌ Failed to send profile notification to admin {admin_id}: {e}")
         except Exception as e:

@@ -372,7 +372,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_studio_rules":
         await cmd_studio_rules(update, context)
     elif query.data == "cmd_user_store":
+        # Legacy static store, keep for backward compatibility (if needed)
         await cmd_user_store(update, context)
+    elif query.data == "cmd_store":
+        # New cart-based store
+        from src.handlers.store_user_handlers import cmd_store
+        await cmd_store(update, context)
     elif query.data == "cmd_check_shake_credits":
         await cmd_check_shake_credits(update, context)
     elif query.data == "cmd_order_shake":
@@ -586,8 +591,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         try:
-            from src.database.shake_operations import mark_shake_paid
-            result = mark_shake_paid(shake_id, admin_id)
+            from src.database.payment_approvals import approve_shake_payment
+            result = approve_shake_payment(shake_id, admin_id)
             
             if result:
                 user_id = result.get('user_id')
@@ -631,8 +636,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         try:
-            from src.database.shake_operations import mark_shake_credit_terms
-            result = mark_shake_credit_terms(shake_id, admin_id)
+            from src.database.payment_approvals import approve_shake_credit
+            result = approve_shake_credit(shake_id, admin_id)
             
             if result:
                 user_id = result.get('user_id')
@@ -782,28 +787,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await callback_settings(update, context)
     elif query.data == "main_menu":
         await callback_main_menu(update, context)
-    elif query.data == "edit_weight":
-        # User wants to edit their weight for today
-        await query.answer()
-        from src.database.activity_operations import get_today_weight
-        from src.handlers.activity_handlers import WEIGHT_VALUE
-        
-        user_id = query.from_user.id
-        current_weight = get_today_weight(user_id)
-        
-        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
-        await query.message.reply_text(
-            f"✏️ *Edit Your Weight*\n\n"
-            f"Current Weight: {current_weight} kg\n\n"
-            f"Enter your new weight in kg (e.g., 76.5):",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-        logger.info(f"[WEIGHT_EDIT] User {user_id} started editing weight. Current: {current_weight}kg")
-        return WEIGHT_VALUE
-    elif query.data == "cancel":
-        await query.answer()
-        await query.message.reply_text("❌ Cancelled.")
     # Commerce hub callbacks
     elif query.data.startswith("store_") or query.data.startswith("sub_") or \
          query.data.startswith("pt_") or query.data.startswith("event_"):

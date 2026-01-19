@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant U as User
+    participant B as Bot
+    participant DB as Database
+    participant A as Admin
+    participant S as Scheduler
+
+    U->>B: Checkout (FULL/PARTIAL/CREDIT)
+    B->>DB: create_order(user, items, payment_method)
+    DB-->>B: order_id, total, balance
+    B->>A: notify admins (Open Order button)
+    Note right of A: Admin reviews order
+    A->>B: Record payment / Set credit terms
+    B->>DB: apply_order_payment(order_id, amount)
+    DB-->>B: updated order (payment_status, balance)
+    B->>U: Notify user (payment recorded / partial / credit terms)
+
+    S->>DB: find overdue credit orders
+    DB-->>S: list of pending_credit_orders
+    S->>U: send reminder message (Mark as Paid button)
+    U->>B: clicks Mark as Paid
+    B->>DB: apply_order_payment(order_id, amount=balance)
+    DB-->>B: order marked PAID
+    B->>A: optional admin notification (payment cleared)

@@ -54,15 +54,43 @@ def get_db_cursor(commit=True):
         if commit:
             conn.commit()
     except Exception as e:
-        if conn:
-            conn.rollback()
+        # Try rollback if possible; if the connection is already closed, discard it
+        try:
+            if conn:
+                conn.rollback()
+        except (InterfaceError, OperationalError) as rollback_exc:
+            logger.warning(f"Rollback failed - connection closed or broken: {rollback_exc}")
+            # Try to remove/close this connection from the pool so it's not reused
+            try:
+                if conn:
+                    try:
+                        pool.putconn(conn, close=True)
+                        logger.info("Closed broken DB connection and removed from pool")
+                    except Exception as close_exc:
+                        logger.debug(f"Error closing broken connection: {close_exc}")
+                    finally:
+                        # Ensure we don't try to reuse this connection further
+                        conn = None
+            except Exception as close_exc:
+                logger.debug(f"Error closing broken connection (outer): {close_exc}")
+                conn = None
+
         logger.error(f"Database error: {e}")
         raise
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            pool.putconn(conn)  # Return connection to pool
+        # Close cursor if open
+        try:
+            if cursor:
+                cursor.close()
+        except Exception as cur_exc:
+            logger.debug(f"Error closing cursor: {cur_exc}")
+
+        # Return connection to pool only if it's still valid (conn may have been closed above)
+        try:
+            if conn and getattr(conn, "closed", 1) == 0:
+                pool.putconn(conn)
+        except Exception as put_exc:
+            logger.debug(f"Error returning connection to pool: {put_exc}")
 
 def execute_query(query: str, params: tuple = None, fetch_one: bool = False):
     """Execute a query using connection pool - supports concurrent users"""

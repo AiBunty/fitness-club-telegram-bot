@@ -15,7 +15,7 @@ from src.database.shake_operations import (
 from src.database.shake_credits_operations import (
     get_user_credits, consume_credit
 )
-from src.utils.auth import is_admin_id, is_staff
+from src.utils.auth import is_admin_id, is_staff, check_user_approved
 from src.utils.role_notifications import get_moderator_chat_ids
 from src.config import SUPER_ADMIN_USER_ID
 
@@ -281,27 +281,43 @@ async def confirm_shake_order(update: Update, context: ContextTypes.DEFAULT_TYPE
         "📋 *Credit Terms* - Start payment reminder follow-up"
     )
     
-    # Get admin chat IDs and send notification
+    # Get admin chat IDs and send notification (with fallback)
     try:
         admin_ids = get_moderator_chat_ids()
-        if admin_ids:
-            for admin_id in admin_ids:
-                try:
-                    keyboard = [
-                        [InlineKeyboardButton("💵 Paid", callback_data=f"shake_paid_{shake_id}")],
-                        [InlineKeyboardButton("📋 Credit Terms", callback_data=f"shake_credit_terms_{shake_id}")],
-                        [InlineKeyboardButton("❌ Cancel Order", callback_data=f"cancel_shake_{shake_id}")]
-                    ]
-                    await context.bot.send_message(
-                        chat_id=admin_id,
-                        text=admin_text,
-                        reply_markup=InlineKeyboardMarkup(keyboard),
-                        parse_mode='Markdown'
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send notification to admin {admin_id}: {e}")
     except Exception as e:
         logger.error(f"Failed to get admin IDs: {e}")
+        admin_ids = []
+
+    logger.debug(f"Admin IDs resolved for shake notification: {admin_ids}")
+
+    # If no admin IDs returned, try fallback to SUPER_ADMIN_USER_ID (if configured)
+    if not admin_ids:
+        try:
+            fallback_id = int(SUPER_ADMIN_USER_ID) if SUPER_ADMIN_USER_ID else 0
+        except Exception:
+            fallback_id = 0
+        if fallback_id and fallback_id > 0:
+            logger.warning(f"No admins found; falling back to SUPER_ADMIN_USER_ID {fallback_id}")
+            admin_ids = [fallback_id]
+        else:
+            logger.warning("No admin or super-admin configured - shake order notification not sent to admins")
+
+    # Send messages to resolved admin IDs
+    for admin_id in admin_ids or []:
+        try:
+            keyboard = [
+                [InlineKeyboardButton("💵 Paid", callback_data=f"shake_paid_{shake_id}")],
+                [InlineKeyboardButton("📋 Credit Terms", callback_data=f"shake_credit_terms_{shake_id}")],
+                [InlineKeyboardButton("❌ Cancel Order", callback_data=f"cancel_shake_{shake_id}")]
+            ]
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Failed to send notification to admin {admin_id}: {e}")
     
     logger.info(f"Shake order {shake_id} placed by user {user_id}, flavor {flavor_id}")
     

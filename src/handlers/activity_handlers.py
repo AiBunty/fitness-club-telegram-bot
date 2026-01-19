@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 WEIGHT_VALUE, WATER_CUPS, MEAL_PHOTO, HABITS_CONFIRM, CHECKIN_METHOD, CHECKIN_PHOTO = range(6)
 
 async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start weight logging"""
+    """Start weight logging or handle edit_weight callback"""
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END
@@ -36,9 +36,27 @@ async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
         user = update.callback_query.from_user
         message = update.callback_query.message
+        callback_data = update.callback_query.data
     else:
         user = update.message.from_user
         message = update.message
+        callback_data = None
+    
+    # If this is an edit_weight callback, send edit prompt and return WEIGHT_VALUE
+    if callback_data == "edit_weight":
+        current_weight = get_today_weight(user.id)
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
+        # Set a flag in user_data to indicate edit mode
+        context.user_data['weight_edit_mode'] = True
+        await message.reply_text(
+            f"✏️ *Edit Your Weight*\n\n"
+            f"Current Weight: {current_weight} kg\n\n"
+            f"Enter your new weight in kg (e.g., 76.5):",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        logger.info(f"[WEIGHT_EDIT] User {user.id} started editing weight. Current: {current_weight}kg")
+        return WEIGHT_VALUE
     
     # Check if weight already entered today
     today_weight = get_today_weight(user.id)
@@ -97,17 +115,45 @@ async def get_weight_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Invalid weight. Please enter a value between 30-300 kg."
             )
             return WEIGHT_VALUE
-        
+
         # Get yesterday's weight for comparison
         from src.database.activity_operations import get_yesterday_weight
         yesterday_weight = get_yesterday_weight(user.id)
-        
-        result = log_weight(user.id, weight)
-        
+        # Normalize Decimal -> float to avoid TypeError when mixing types
+        try:
+            from decimal import Decimal
+            if isinstance(yesterday_weight, Decimal):
+                yesterday_weight = float(yesterday_weight)
+        except Exception:
+            # If decimal import fails or conversion fails, leave as-is and rely on later checks
+            pass
+
+        # If in edit mode, just update weight, then clear the flag
+        if context.user_data.get('weight_edit_mode'):
+            context.user_data.pop('weight_edit_mode', None)
+            logger.info(f"[WEIGHT_EDIT] User {user.id} is editing weight to {weight}")
+            try:
+                result = log_weight(user.id, weight)
+            except Exception as e:
+                logger.error(f"[WEIGHT_EDIT_ERROR] DB error for user {user.id}: {e}", exc_info=True)
+                await update.message.reply_text(
+                    "❌ An error occurred while updating your weight. Please try again later or contact admin."
+                )
+                return WEIGHT_VALUE
+        else:
+            try:
+                result = log_weight(user.id, weight)
+            except Exception as e:
+                logger.error(f"[WEIGHT_LOG_ERROR] DB error for user {user.id}: {e}", exc_info=True)
+                await update.message.reply_text(
+                    "❌ An error occurred while logging your weight. Please try again later or contact admin."
+                )
+                return WEIGHT_VALUE
+
         if result:
             message_text = f"✅ *Weight Logged Successfully!*\n\n"
             message_text += f"📊 Today's Weight: {weight} kg\n"
-            
+
             if yesterday_weight:
                 diff = weight - yesterday_weight
                 if diff > 0:
@@ -118,27 +164,46 @@ async def get_weight_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     message_text += f"➡️ No change from yesterday ({yesterday_weight} kg)\n"
             else:
                 message_text += f"ℹ️ No previous weight data to compare\n"
-            
+
             message_text += f"💰 Points Awarded: +10\n"
             message_text += f"📈 Keep tracking your progress! 💪"
-            
-            await update.message.reply_text(
-                message_text,
-                reply_markup=ReplyKeyboardRemove(),
-                parse_mode="Markdown"
-            )
+
+            # Mark success in user_data to avoid sending duplicate error messages
+            context.user_data['weight_success_sent'] = True
+            try:
+                await update.message.reply_text(
+                    message_text,
+                    reply_markup=ReplyKeyboardRemove(),
+                    parse_mode="Markdown"
+                )
+            finally:
+                # remove the flag after sending (no longer needed)
+                context.user_data.pop('weight_success_sent', None)
         else:
+            logger.error(f"[WEIGHT_LOG_FAIL] log_weight returned None for user {user.id}, weight: {weight}")
             await update.message.reply_text(
                 "❌ Failed to log weight. Try again."
             )
             return WEIGHT_VALUE
-            
+
     except ValueError:
+        logger.warning(f"[WEIGHT_INPUT_ERROR] User {user.id} sent invalid input for weight: '{text}'. State: WEIGHT_VALUE")
         await update.message.reply_text(
-            "❌ Invalid input. Please enter a number (e.g., 75.5)"
+            "❌ Invalid input for weight. Please enter a number (e.g., 75.5). If you see a message about 'number 1-5', please report this to admin."
         )
         return WEIGHT_VALUE
-    
+    except Exception as e:
+        logger.error(f"[WEIGHT_INPUT_FATAL] Unexpected error for user {user.id}: {e}", exc_info=True)
+        # If we already sent success to this user in this flow, skip sending the generic error
+        if context.user_data.get('weight_success_sent'):
+            logger.info(f"[WEIGHT_INPUT_FATAL] Suppressing error message because success was already sent to user {user.id}")
+            context.user_data.pop('weight_success_sent', None)
+            return ConversationHandler.END
+        await update.message.reply_text(
+            "❌ An unexpected error occurred. Please try again later or contact admin."
+        )
+        return WEIGHT_VALUE
+
     return ConversationHandler.END
 
 async def cmd_water(update: Update, context: ContextTypes.DEFAULT_TYPE):

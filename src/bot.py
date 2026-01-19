@@ -11,6 +11,10 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters
 )
+from src.handlers.store_user_handlers import get_store_conversation_handler
+from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
+from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
+from src.database.store_operations import create_or_update_product  # For migration check
 from src.config import TELEGRAM_BOT_TOKEN
 from src.database.connection import test_connection
 from src.handlers.user_handlers import (
@@ -115,6 +119,9 @@ from src.utils.scheduled_jobs import (
     send_water_reminder_hourly, send_weight_reminder_morning, send_habits_reminder_evening,
     send_shake_credit_reminders
 )
+from src.utils.monitoring import (
+    check_overdue_reminder_spike, check_bulk_expiry_candidates, send_alert_to_admin
+)
 from src.utils.subscription_scheduler import (
     send_expiry_reminders, send_grace_period_reminders,
     send_followup_reminders, lock_expired_subscriptions
@@ -163,6 +170,7 @@ def _get_commands_for_role(role: str) -> list:
         BotCommand("whoami", "Show my ID & role"),
         BotCommand("subscribe", "Subscribe to gym membership"),
         BotCommand("my_subscription", "View subscription status"),
+            BotCommand("store", "Shop gym products"),
     ]
     
     # Staff commands - staff-specific management
@@ -186,6 +194,8 @@ def _get_commands_for_role(role: str) -> list:
         BotCommand("followup_settings", "Follow-up settings"),
         BotCommand("pending_requests", "Review payment requests"),
         BotCommand("reports", "Admin reports & analytics"),
+            BotCommand("store_admin", "Manage store orders"),
+            BotCommand("store_excel", "Bulk upload products"),
     ]
     
     if role == "admin":
@@ -304,7 +314,8 @@ def main():
     weight_handler = ConversationHandler(
         entry_points=[
             CommandHandler('weight', cmd_weight),
-            CallbackQueryHandler(cmd_weight, pattern="^cmd_weight$")
+            CallbackQueryHandler(cmd_weight, pattern="^cmd_weight$"),
+            CallbackQueryHandler(cmd_weight, pattern="^edit_weight$")  # Add edit_weight callback
         ],
         states={
             WEIGHT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weight_input)],
@@ -411,6 +422,14 @@ def main():
     # Accounts Receivable (split-payment) conversation
     application.add_handler(get_ar_conversation_handler())
     
+    # Store handlers
+    # Register cart-based store handlers
+    from src.handlers.store_user_handlers import cmd_store
+    application.add_handler(CommandHandler('store', cmd_store))
+    application.add_handler(get_store_conversation_handler())
+    application.add_handler(get_store_admin_conversation_handler())
+    application.add_handler(get_store_excel_conversation_handler())
+
     application.add_handler(CallbackQueryHandler(callback_admin_approve_sub, pattern="^admin_sub_approve$"))
     application.add_handler(CallbackQueryHandler(callback_approve_sub_standard, pattern="^sub_approve_"))
     application.add_handler(CallbackQueryHandler(callback_reject_sub, pattern="^sub_reject_"))
@@ -476,8 +495,8 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_top_activities, pattern="^dashboard_activities$"))
     application.add_handler(CallbackQueryHandler(callback_admin_dashboard, pattern="^admin_dashboard$"))
     
-    # Callback query handler for inline buttons (exclude subscription/payment callbacks)
-    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_)"))
+    # Callback query handler for inline buttons (exclude subscription/payment/conversation callbacks)
+    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel)"))
     application.add_handler(CallbackQueryHandler(handle_analytics_callback))
     application.add_handler(CallbackQueryHandler(callback_view_notification, pattern="^notif_"))
     application.add_handler(CallbackQueryHandler(callback_delete_notification, pattern="^delete_notif_"))
@@ -596,6 +615,33 @@ def main():
     except Exception as e:
         logger.warning(f"Receivables reminder hook not registered: {e}")
     
+    # Monitoring checks (run shortly after receivables reminders)
+    def _monitoring_checks(context):
+        try:
+            # Spike detection for overdue shake reminders (recent window)
+            spike = check_overdue_reminder_spike(minutes_window=10, threshold=50)
+            if spike.get('count', 0) >= 50:
+                send_alert_to_admin(context.bot, f"ALERT: overdue_reminder spike detected: {spike['count']} records in last 10 minutes")
+
+            # Bulk expiry candidate detection (today)
+            from datetime import date
+            today = date.today()
+            bulk = check_bulk_expiry_candidates(today, threshold=500)
+            if bulk.get('count', 0) >= 500:
+                send_alert_to_admin(context.bot, f"ALERT: bulk expiry candidates detected: {bulk['count']} users")
+        except Exception as exc:
+            logger.error(f"Monitoring checks failed: {exc}", exc_info=True)
+
+    try:
+        job_queue.run_daily(
+            _monitoring_checks,
+            time=dt_time(hour=11, minute=10),
+            name="monitoring_checks"
+        )
+        logger.info("Scheduled monitoring checks at 11:10 AM")
+    except Exception as e:
+        logger.warning(f"Monitoring job not scheduled: {e}")
+    
     # Subscription expiry reminders at 9 AM
     job_queue.run_daily(
         lambda context: send_expiry_reminders(context.bot),
@@ -628,6 +674,18 @@ def main():
         name="lock_expired_subscriptions"
     )
     logger.info("Scheduled expired subscription locking at 00:05")
+    
+    # Expire events just after midnight
+    try:
+        from src.utils.scheduled_jobs import hide_expired_events
+        job_queue.run_daily(
+            hide_expired_events,
+            time=dt_time(hour=0, minute=10),
+            name="hide_expired_events"
+        )
+        logger.info("Scheduled event expiry job at 00:10")
+    except Exception as e:
+        logger.warning(f"Event expiry job not scheduled: {e}")
     
     # Add global error handler for unhandled exceptions
     async def error_handler(update, context):
@@ -696,3 +754,8 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+from src.handlers.store_user_handlers import get_store_conversation_handler
+from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
+from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
+from src.database.store_operations import create_or_update_product  # For migration check

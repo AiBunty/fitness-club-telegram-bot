@@ -334,12 +334,17 @@ async def send_shake_credit_reminders(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
                 
-                # Update reminder count
+                # Update reminder count with guard to avoid over-incrementing
                 from src.database.connection import execute_query
-                execute_query(
-                    "UPDATE shake_requests SET overdue_reminder_count = overdue_reminder_count + 1 WHERE shake_request_id = %s",
-                    (shake_id,)
+                update_sql = (
+                    "UPDATE shake_requests SET overdue_reminder_count = COALESCE(overdue_reminder_count,0) + 1 "
+                    "WHERE shake_request_id = %s AND COALESCE(overdue_reminder_count,0) < 3"
                 )
+                rows_affected = execute_query(update_sql, (shake_id,))
+                # Only count/send if we actually incremented the counter
+                if not rows_affected or rows_affected <= 0:
+                    logger.info(f"Skipping increment for shake {shake_id} (already at max reminders)")
+                    continue
                 
                 sent_count += 1
             except Exception as e:
@@ -462,6 +467,40 @@ Join now: /challenges
     
     except Exception as e:
         logger.error(f"Error in broadcast_challenge_starts: {e}")
+
+
+async def hide_expired_events(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Hide or expire events whose end_date is before today.
+    Runs daily to ensure expired events are not shown in active listings.
+    """
+    try:
+        logger.info("Checking for expired events to hide...")
+        from src.database.connection import execute_query
+
+        # Mark events as expired if end_date < CURRENT_DATE and status='active'
+        update_sql = """
+            UPDATE events
+            SET status = 'expired', updated_at = NOW()
+            WHERE status = 'active' AND end_date IS NOT NULL AND end_date < CURRENT_DATE
+            RETURNING event_id
+        """
+        rows = execute_query(update_sql)
+        count = len(rows) if rows else 0
+        if count > 0:
+            logger.info(f"Marked {count} events as expired")
+            # Notify admin
+            from src.config import SUPER_ADMIN_USER_ID
+            if SUPER_ADMIN_USER_ID:
+                await context.bot.send_message(
+                    chat_id=int(SUPER_ADMIN_USER_ID),
+                    text=f"⚠️ {count} events marked expired and hidden from listings.",
+                    parse_mode="Markdown"
+                )
+        else:
+            logger.info("No events to expire today")
+    except Exception as e:
+        logger.error(f"Error hiding expired events: {e}")
 
 
 async def process_daily_challenge_points(context: ContextTypes.DEFAULT_TYPE):
