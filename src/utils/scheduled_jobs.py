@@ -12,6 +12,161 @@ from src.config import SUPER_ADMIN_USER_ID
 logger = logging.getLogger(__name__)
 
 
+# --- Per-user reminder scheduling helpers ---
+def _job_exists(application, name: str) -> bool:
+    try:
+        existing = application.job_queue.get_jobs_by_name(name)
+        return bool(existing)
+    except Exception:
+        return False
+
+
+def schedule_user_water_reminder(application, user_id: int, interval_minutes: int):
+    """Schedule a repeating per-user water reminder. Idempotent."""
+    try:
+        job_name = f"water_reminder_{user_id}"
+        # Cancel existing job if interval changed
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        if existing:
+            # If existing interval differs we reschedule
+            logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} rescheduling interval={interval_minutes}")
+            for j in existing:
+                try:
+                    j.schedule_removal()
+                except Exception:
+                    pass
+
+        # Schedule the per-user repeating job
+        async def _user_water_job(ctx: ContextTypes.DEFAULT_TYPE):
+            from src.database.reminder_operations import get_reminder_preferences
+            prefs = get_reminder_preferences(user_id)
+            if not prefs or not prefs.get('water_reminder_enabled', True):
+                logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} disabled")
+                return
+            # send single reminder
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                text = (
+                    "💧 *Hydration Reminder*\n\n"
+                    "Time to log your water intake! 💦\n\n"
+                    "Use /water to log your water consumption."
+                )
+                keyboard = [[InlineKeyboardButton("💧 Log Water", callback_data="cmd_water")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await ctx.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
+                logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} sent")
+            except Exception as e:
+                logger.debug(f"Could not send water reminder to user {user_id}: {e}")
+
+        application.job_queue.run_repeating(_user_water_job, interval=interval_minutes * 60, first=10, name=job_name)
+        logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} time=interval_{interval_minutes}m")
+    except Exception as e:
+        logger.debug(f"Failed to schedule water reminder for {user_id}: {e}")
+
+
+def cancel_user_water_reminder(application, user_id: int):
+    try:
+        job_name = f"water_reminder_{user_id}"
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        for j in existing:
+            try:
+                j.schedule_removal()
+            except Exception:
+                pass
+        logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} cancelled")
+    except Exception as e:
+        logger.debug(f"Failed to cancel water reminder for {user_id}: {e}")
+
+
+def schedule_user_weight_reminder(application, user_id: int, time_str: str):
+    """Schedule a daily per-user weight reminder at `time_str` (HH:MM). Idempotent."""
+    try:
+        # parse time_str
+        hh, mm = 6, 0
+        try:
+            parts = time_str.split(":")
+            hh = int(parts[0])
+            mm = int(parts[1])
+        except Exception:
+            hh, mm = 6, 0
+
+        job_name = f"weight_reminder_{user_id}"
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        if existing:
+            # Remove existing before scheduling new
+            for j in existing:
+                try:
+                    j.schedule_removal()
+                except Exception:
+                    pass
+            logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} rescheduled new_time={time_str}")
+
+        async def _user_weight_job(ctx: ContextTypes.DEFAULT_TYPE):
+            from src.database.reminder_operations import get_reminder_preferences
+            prefs = get_reminder_preferences(user_id)
+            if not prefs or not prefs.get('weight_reminder_enabled', True):
+                logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} disabled")
+                return
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                text = (
+                    "⚖️ *Good Morning!* ☀️\n\n"
+                    "Time to log your weight today! 📊\n\n"
+                    "Use /weight to log your weight."
+                )
+                keyboard = [[InlineKeyboardButton("⚖️ Log Weight", callback_data="cmd_weight")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await ctx.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
+                logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} sent")
+            except Exception as e:
+                logger.debug(f"Could not send weight reminder to user {user_id}: {e}")
+
+        from datetime import time as dt_time
+        application.job_queue.run_daily(_user_weight_job, time=dt_time(hour=hh, minute=mm), name=job_name)
+        logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} time={time_str}")
+    except Exception as e:
+        logger.debug(f"Failed to schedule weight reminder for {user_id}: {e}")
+
+
+def cancel_user_weight_reminder(application, user_id: int):
+    try:
+        job_name = f"weight_reminder_{user_id}"
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        for j in existing:
+            try:
+                j.schedule_removal()
+            except Exception:
+                pass
+        logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} cancelled")
+    except Exception as e:
+        logger.debug(f"Failed to cancel weight reminder for {user_id}: {e}")
+
+
+def schedule_all_user_reminders(application):
+    """Bootstrap per-user reminders at startup. Idempotent."""
+    try:
+        from src.database.reminder_operations import get_users_with_water_reminders_enabled, get_users_with_weight_reminders_enabled
+
+        # Water
+        water_users = get_users_with_water_reminders_enabled() or []
+        for u in water_users:
+            uid = u.get('user_id')
+            interval = u.get('interval_minutes') or 60
+            schedule_user_water_reminder(application, uid, interval)
+
+        # Weight
+        weight_users = get_users_with_weight_reminders_enabled() or []
+        for u in weight_users:
+            uid = u.get('user_id')
+            time_str = u.get('reminder_time') or '06:00'
+            schedule_user_weight_reminder(application, uid, time_str)
+
+        logger.info("[SCHEDULER] started")
+    except Exception as e:
+        logger.debug(f"Failed to bootstrap per-user reminders: {e}")
+
+# --- End per-user helpers ---
+
 async def send_eod_report(context: ContextTypes.DEFAULT_TYPE):
     """
     Send End of Day report to admin at 23:55

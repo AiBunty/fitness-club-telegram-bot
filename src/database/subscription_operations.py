@@ -572,3 +572,114 @@ def get_total_revenue(start_date=None, end_date=None) -> float:
         logger.error(f"Error calculating revenue: {e}")
     
     return 0
+
+
+def create_split_payment_receivable(user_id: int, request_id: int, upi_amount: float, cash_amount: float) -> dict:
+    """Create a split payment receivable with two transaction lines: UPI and CASH_PENDING"""
+    try:
+        total_amount = upi_amount + cash_amount
+        
+        # Create receivable for the total amount
+        receivable = create_receivable(
+            user_id=user_id,
+            receivable_type='subscription',
+            source_id=request_id,
+            bill_amount=total_amount,
+            discount_amount=0.0,
+            final_amount=total_amount
+        )
+        
+        if not receivable:
+            logger.error(f"Failed to create receivable for split payment")
+            return None
+        
+        receivable_id = receivable.get('receivable_id')
+        
+        # Create transaction lines for UPI (pending) and CASH (pending)
+        lines = [
+            {
+                'method': 'upi',
+                'amount': upi_amount,
+                'reference': f"SPLIT_UPI_{request_id}",
+            },
+            {
+                'method': 'cash',
+                'amount': cash_amount,
+                'reference': f"SPLIT_CASH_{request_id}",
+            }
+        ]
+        
+        create_transactions(receivable_id, lines, admin_user_id=None)
+        
+        # Update receivable status (will be 'partial' since lines are recorded but not marked as paid yet)
+        updated = update_receivable_status(receivable_id)
+        
+        logger.info(f"Split payment receivable created: User {user_id}, Request {request_id}, UPI {upi_amount}, Cash {cash_amount}")
+        
+        return {
+            'receivable_id': receivable_id,
+            'receivable': updated,
+            'upi_amount': upi_amount,
+            'cash_amount': cash_amount
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating split payment receivable: {e}")
+        return None
+
+
+def record_split_upi_payment(user_id: int, request_id: int, upi_amount: float, transaction_ref: str) -> bool:
+    """Record UPI payment for a split payment - updates AR ledger"""
+    try:
+        # Get the receivable for this request
+        receivable = get_receivable_by_source('subscription', request_id)
+        if not receivable:
+            logger.error(f"Receivable not found for split payment request {request_id}")
+            return False
+        
+        receivable_id = receivable.get('receivable_id')
+        
+        # Update the UPI transaction line with the reference
+        execute_query(
+            "UPDATE ar_transactions SET reference=%s WHERE receivable_id=%s AND method='upi'",
+            (transaction_ref, receivable_id)
+        )
+        
+        # Update receivable status
+        update_receivable_status(receivable_id)
+        
+        logger.info(f"Split payment UPI recorded: User {user_id}, Request {request_id}, Amount {upi_amount}, Ref {transaction_ref}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error recording split UPI payment: {e}")
+        return False
+
+
+def record_split_cash_payment(user_id: int, request_id: int) -> bool:
+    """Record cash payment for a split payment - updates AR ledger"""
+    try:
+        # Get the receivable for this request
+        receivable = get_receivable_by_source('subscription', request_id)
+        if not receivable:
+            logger.error(f"Receivable not found for split payment request {request_id}")
+            return False
+        
+        receivable_id = receivable.get('receivable_id')
+        
+        # Mark the cash transaction as paid (update reference to confirmed)
+        execute_query(
+            "UPDATE ar_transactions SET reference=%s WHERE receivable_id=%s AND method='cash'",
+            ('CASH_CONFIRMED', receivable_id)
+        )
+        
+        # Update receivable status
+        updated = update_receivable_status(receivable_id)
+        
+        logger.info(f"Split payment cash confirmed: User {user_id}, Request {request_id}, Status {updated.get('status')}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error confirming split cash payment: {e}")
+        return False
+

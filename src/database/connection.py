@@ -117,6 +117,14 @@ def get_connection():
     db = DatabaseConnection()
     return db.get_connection()
 
+
+def get_db_connection():
+    """Compatibility shim for older tests/modules expecting `get_db_connection`.
+
+    Delegates to `get_connection()` to preserve existing pool behaviour.
+    """
+    return get_connection()
+
 def test_connection() -> bool:
     try:
         with get_db_cursor(commit=False) as cursor:

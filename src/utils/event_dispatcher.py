@@ -110,9 +110,14 @@ def schedule_followups(application, chat_id, event_key, context_vars=None):
             try:
                 order_id = ctx_vars.get('order_id')
                 if order_id:
-                    res = execute_query("SELECT payment_status FROM store_orders WHERE order_id = %s", (order_id,), fetch_one=True)
-                    if res and res.get('payment_status') and res.get('payment_status').upper() in ('PAID','COMPLETED','CLOSED'):
-                        logger.info(f"Skipping followup {tpl_key} for order {order_id} (payment completed)")
+                    # Stop followups only when outstanding balance == 0 or order is closed/paid
+                    res = execute_query("SELECT payment_status, balance FROM store_orders WHERE order_id = %s", (order_id,), fetch_one=True)
+                    try:
+                        balance = float(res.get('balance') or 0) if res else 0
+                    except Exception:
+                        balance = 0
+                    if (res and ((balance == 0) or (res.get('payment_status') and res.get('payment_status').upper() in ('PAID','COMPLETED','CLOSED')))):
+                        logger.info(f"Skipping followup {tpl_key} for order {order_id} (no outstanding balance or closed)")
                         return
             except Exception:
                 logger.debug('Followup stop-check failed; proceeding')

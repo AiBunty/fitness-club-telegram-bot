@@ -5,7 +5,7 @@ Handles all shake credit transactions, purchases, and consumption
 
 import logging
 from datetime import datetime, date
-from src.database.connection import execute_query
+from src.database.connection import execute_query, get_db_cursor
 from src.database.ar_operations import (
     create_receivable, create_transactions, update_receivable_status, get_receivable_by_source
 )
@@ -46,11 +46,18 @@ def get_user_credits(user_id: int) -> dict:
         result = execute_query(query, (user_id,), fetch_one=True)
         
         if result:
+            # Compute authoritative available credits from transaction ledger
+            try:
+                ledger = execute_query("SELECT COALESCE(SUM(credit_change),0) as avail FROM shake_transactions WHERE user_id = %s", (user_id,), fetch_one=True)
+                avail = ledger.get('avail', 0) if ledger else 0
+            except Exception:
+                avail = result['available_credits']
+
             return {
                 'user_id': result['user_id'],
                 'total_credits': result['total_credits'],
                 'used_credits': result['used_credits'],
-                'available_credits': result['available_credits'],
+                'available_credits': avail,
                 'last_updated': result['last_updated']
             }
         else:
@@ -113,40 +120,42 @@ def add_credits(user_id: int, credits: int, transaction_type: str, description: 
 def consume_credit(user_id: int, reason: str = "Shake consumed") -> bool:
     """Deduct 1 shake credit (when shake is consumed)"""
     try:
-        # Check if user has available credits
-        query_check = """
-            SELECT available_credits FROM shake_credits WHERE user_id = %s
-        """
-        result = execute_query(query_check, (user_id,), fetch_one=True)
-        
-        if not result or result['available_credits'] <= 0:
-            logger.warning(f"User {user_id} has no available credits")
-            return False
-        
-        # Deduct credit
-        query_deduct = """
-            UPDATE shake_credits 
-            SET used_credits = used_credits + 1,
-                available_credits = available_credits - 1,
-                last_updated = CURRENT_TIMESTAMP
-            WHERE user_id = %s
-            RETURNING used_credits, available_credits
-        """
-        update_result = execute_query(query_deduct, (user_id,), fetch_one=True)
-        
-        if update_result:
-            # Log transaction
-            query_log = """
-                INSERT INTO shake_transactions 
-                (user_id, credit_change, transaction_type, description, created_at)
-                VALUES (%s, -1, 'consume', %s, CURRENT_TIMESTAMP)
-            """
-            execute_query(query_log, (user_id, reason))
-            
-            logger.info(f"Deducted 1 credit from user {user_id}. Used: {update_result['used_credits']}, Available: {update_result['available_credits']}")
+        # Perform an atomic, ledger-based consumption using DB transaction and row lock
+        with get_db_cursor(commit=True) as cur:
+            # Ensure shake_credits row exists and lock it to prevent race
+            cur.execute("SELECT credit_id, total_credits, used_credits, available_credits FROM shake_credits WHERE user_id = %s FOR UPDATE", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                # initialize record if missing
+                cur.execute("INSERT INTO shake_credits (user_id, total_credits, used_credits, available_credits, last_updated) VALUES (%s, 0, 0, 0, CURRENT_TIMESTAMP)", (user_id,))
+                # re-select
+                cur.execute("SELECT credit_id, total_credits, used_credits, available_credits FROM shake_credits WHERE user_id = %s FOR UPDATE", (user_id,))
+                row = cur.fetchone()
+
+            # Compute authoritative balance from transaction ledger
+            cur.execute("SELECT COALESCE(SUM(credit_change),0) as avail FROM shake_transactions WHERE user_id = %s", (user_id,))
+            ledger = cur.fetchone()
+            avail = ledger.get('avail', 0) if ledger else 0
+
+            if avail <= 0:
+                logger.warning(f"User {user_id} has no available credits (ledger)")
+                return False
+
+            # Insert negative ledger entry for consumption
+            cur.execute(
+                "INSERT INTO shake_transactions (user_id, credit_change, transaction_type, description, created_at) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)",
+                (user_id, -1, 'consume', reason)
+            )
+
+            # Update aggregate cache row to reflect counts (best-effort, within same transaction)
+            cur.execute(
+                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s RETURNING used_credits, available_credits",
+                (user_id,)
+            )
+            updated = cur.fetchone()
+
+            logger.info(f"Deducted 1 credit from user {user_id}. Ledger available before deduction: {avail}")
             return True
-        
-        return False
     except Exception as e:
         logger.error(f"Failed to consume credit for user {user_id}: {e}")
         return False
@@ -158,40 +167,33 @@ def consume_credit_with_date(user_id: int, consumption_date: date, reason: str =
     Used when admin manually logs shake consumption without credit
     """
     try:
-        # Check if user has available credits
-        query_check = """
-            SELECT available_credits FROM shake_credits WHERE user_id = %s
-        """
-        result = execute_query(query_check, (user_id,), fetch_one=True)
-        
-        if not result or result['available_credits'] <= 0:
-            logger.warning(f"User {user_id} has no available credits")
-            return False
-        
-        # Deduct credit
-        query_deduct = """
-            UPDATE shake_credits 
-            SET used_credits = used_credits + 1,
-                available_credits = available_credits - 1,
-                last_updated = CURRENT_TIMESTAMP
-            WHERE user_id = %s
-            RETURNING used_credits, available_credits
-        """
-        update_result = execute_query(query_deduct, (user_id,), fetch_one=True)
-        
-        if update_result:
-            # Log transaction with specific date
-            query_log = """
-                INSERT INTO shake_transactions 
-                (user_id, credit_change, transaction_type, description, reference_date, created_at)
-                VALUES (%s, -1, 'admin_deduction', %s, %s, CURRENT_TIMESTAMP)
-            """
-            execute_query(query_log, (user_id, reason, consumption_date))
-            
+        with get_db_cursor(commit=True) as cur:
+            cur.execute("SELECT credit_id FROM shake_credits WHERE user_id = %s FOR UPDATE", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                cur.execute("INSERT INTO shake_credits (user_id, total_credits, used_credits, available_credits, last_updated) VALUES (%s, 0, 0, 0, CURRENT_TIMESTAMP)", (user_id,))
+                cur.execute("SELECT credit_id FROM shake_credits WHERE user_id = %s FOR UPDATE", (user_id,))
+
+            cur.execute("SELECT COALESCE(SUM(credit_change),0) as avail FROM shake_transactions WHERE user_id = %s", (user_id,))
+            ledger = cur.fetchone()
+            avail = ledger.get('avail', 0) if ledger else 0
+
+            if avail <= 0:
+                logger.warning(f"User {user_id} has no available credits (ledger)")
+                return False
+
+            cur.execute(
+                "INSERT INTO shake_transactions (user_id, credit_change, transaction_type, description, reference_date, created_at) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+                (user_id, -1, 'admin_deduction', reason, consumption_date)
+            )
+
+            cur.execute(
+                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s RETURNING used_credits, available_credits",
+                (user_id,)
+            )
+            updated = cur.fetchone()
             logger.info(f"Admin deducted 1 credit from user {user_id} for date {consumption_date}")
             return True
-        
-        return False
     except Exception as e:
         logger.error(f"Failed to consume credit with date for user {user_id}: {e}")
         return False

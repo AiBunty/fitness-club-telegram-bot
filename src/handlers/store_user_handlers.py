@@ -389,10 +389,10 @@ async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="Markdown",
         reply_markup=final_markup
     )
-    # Schedule follow-ups for order placed (if configured)
+    # Schedule follow-ups for order placed only for PARTIAL or CREDIT orders
     try:
         from src.utils.event_dispatcher import schedule_followups
-        if context and getattr(context, 'application', None):
+        if context and getattr(context, 'application', None) and payment_method in ('PARTIAL', 'CREDIT'):
             schedule_followups(context.application, user_id, 'STORE_ORDER_PLACED', {'order_id': order['order_id'], 'name': get_user(user_id).get('full_name') if get_user(user_id) else '', 'amount': order['total_amount']})
     except Exception:
         logger.debug('Could not schedule follow-ups for STORE_ORDER_PLACED')

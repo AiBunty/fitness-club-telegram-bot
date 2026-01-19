@@ -293,6 +293,14 @@ async def _handle_payment_amount(update: Update, context: ContextTypes.DEFAULT_T
                     f"Due Date: {result.get('payment_due_date')}",
                     parse_mode="Markdown"
                 )
+                # Schedule payment reminders for credit approval (idempotent)
+                try:
+                    user_id = order['user_id']
+                    if context and getattr(context, 'application', None):
+                        from src.utils.event_dispatcher import schedule_followups
+                        schedule_followups(context.application, user_id, 'PAYMENT_REMINDER_1', {'order_id': order_id, 'amount': result.get('balance'), 'name': ''})
+                except Exception:
+                    logger.debug('Could not schedule follow-ups for credit-approved order')
             else:
                 await update.message.reply_text("❌ Failed to approve order on credit")
 
@@ -327,6 +335,13 @@ async def _handle_payment_amount(update: Update, context: ContextTypes.DEFAULT_T
                     )
                 except Exception as e:
                     logger.debug(f"Could not notify user {order.get('user_id')} about payment {order_id}: {e}")
+                # If balance remains, schedule payment reminders (idempotent)
+                try:
+                    if result.get('balance', 0) and context and getattr(context, 'application', None):
+                        from src.utils.event_dispatcher import schedule_followups
+                        schedule_followups(context.application, user_id, 'PAYMENT_REMINDER_1', {'order_id': order_id, 'amount': result.get('balance'), 'name': ''})
+                except Exception:
+                    logger.debug('Could not schedule payment follow-ups after applying payment')
             else:
                 await update.message.reply_text("❌ Failed to record payment")
         

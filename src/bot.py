@@ -572,22 +572,12 @@ def main():
     )
     logger.info("Scheduled expiry check at 00:01")
     
-    # Water reminder every hour
-    job_queue.run_repeating(
-        send_water_reminder_hourly,
-        interval=3600,  # Every hour (3600 seconds)
-        name="water_reminder_hourly",
-        first=60  # First run after 60 seconds
-    )
-    logger.info("Scheduled hourly water reminders")
-    
-    # Weight reminder every morning at 6 AM
-    job_queue.run_daily(
-        send_weight_reminder_morning,
-        time=dt_time(hour=6, minute=0),  # 6:00 AM every day
-        name="weight_reminder_morning"
-    )
-    logger.info("Scheduled morning weight reminder at 6:00 AM")
+    # Per-user water & weight reminders (bootstrap)
+    try:
+        from src.utils.scheduled_jobs import schedule_all_user_reminders
+        schedule_all_user_reminders(application)
+    except Exception as e:
+        logger.warning(f"Per-user reminder bootstrap failed: {e}")
     
     # Habits reminder every evening at 8 PM
     job_queue.run_daily(

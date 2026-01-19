@@ -114,6 +114,18 @@ async def callback_water_toggle(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
         logger.info(f"Water reminder {status} for user {user_id}")
+        # Reschedule per-user water reminder
+        try:
+            if context and getattr(context, 'application', None):
+                from src.utils.scheduled_jobs import schedule_user_water_reminder, cancel_user_water_reminder
+                prefs = get_reminder_preferences(user_id)
+                if prefs and prefs.get('water_reminder_enabled', True):
+                    interval = prefs.get('water_reminder_interval_minutes', 60)
+                    schedule_user_water_reminder(context.application, user_id, interval)
+                else:
+                    cancel_user_water_reminder(context.application, user_id)
+        except Exception:
+            logger.debug('Could not reschedule water reminder')
         return REMINDER_MENU
     else:
         await query.edit_message_text("❌ Error updating reminder")
@@ -169,6 +181,17 @@ async def callback_set_water_interval(update: Update, context: ContextTypes.DEFA
             parse_mode="Markdown"
         )
         logger.info(f"Water interval set to {interval}m for user {user_id}")
+        # Reschedule per-user water reminder with new interval
+        try:
+            if context and getattr(context, 'application', None):
+                from src.utils.scheduled_jobs import schedule_user_water_reminder, cancel_user_water_reminder
+                prefs = get_reminder_preferences(user_id)
+                if prefs and prefs.get('water_reminder_enabled', True):
+                    schedule_user_water_reminder(context.application, user_id, interval)
+                else:
+                    cancel_user_water_reminder(context.application, user_id)
+        except Exception:
+            logger.debug('Could not reschedule water reminder after interval change')
         return REMINDER_MENU
     else:
         await query.edit_message_text("❌ Error setting interval")
@@ -232,6 +255,18 @@ async def callback_weight_toggle(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown"
         )
         logger.info(f"Weight reminder {status} for user {user_id}")
+        # Reschedule per-user weight reminder
+        try:
+            if context and getattr(context, 'application', None):
+                from src.utils.scheduled_jobs import schedule_user_weight_reminder, cancel_user_weight_reminder
+                prefs = get_reminder_preferences(user_id)
+                if prefs and prefs.get('weight_reminder_enabled', True):
+                    time_str = prefs.get('weight_reminder_time', '06:00')
+                    schedule_user_weight_reminder(context.application, user_id, time_str)
+                else:
+                    cancel_user_weight_reminder(context.application, user_id)
+        except Exception:
+            logger.debug('Could not reschedule weight reminder')
         return REMINDER_MENU
     else:
         await query.edit_message_text("❌ Error updating reminder")
@@ -270,6 +305,17 @@ async def handle_weight_time_input(update: Update, context: ContextTypes.DEFAULT
             parse_mode="Markdown"
         )
         logger.info(f"Weight time set to {time_str} for user {user_id}")
+        # Reschedule per-user weight reminder at new time
+        try:
+            if context and getattr(context, 'application', None):
+                from src.utils.scheduled_jobs import schedule_user_weight_reminder, cancel_user_weight_reminder
+                prefs = get_reminder_preferences(user_id)
+                if prefs and prefs.get('weight_reminder_enabled', True):
+                    schedule_user_weight_reminder(context.application, user_id, time_str)
+                else:
+                    cancel_user_weight_reminder(context.application, user_id)
+        except Exception:
+            logger.debug('Could not reschedule weight reminder after time change')
         return REMINDER_MENU
     else:
         await update.message.reply_text(

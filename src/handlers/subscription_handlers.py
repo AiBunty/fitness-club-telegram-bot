@@ -22,7 +22,7 @@ from src.utils.auth import is_admin
 logger = logging.getLogger(__name__)
 
 # Conversation states
-SELECT_PLAN, CONFIRM_PLAN, SELECT_PAYMENT, ENTER_UPI_VERIFICATION, ADMIN_APPROVE_SUB, ADMIN_ENTER_AMOUNT, ADMIN_SELECT_DATE = range(7)
+SELECT_PLAN, CONFIRM_PLAN, SELECT_PAYMENT, ENTER_UPI_VERIFICATION, ADMIN_APPROVE_SUB, ADMIN_ENTER_AMOUNT, ADMIN_SELECT_DATE, ENTER_SPLIT_UPI_AMOUNT, ENTER_SPLIT_CONFIRM = range(9)
 
 
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,6 +194,7 @@ async def callback_confirm_subscription(update: Update, context: ContextTypes.DE
     keyboard = [
         [InlineKeyboardButton("💵 Cash Payment", callback_data="pay_method_cash")],
         [InlineKeyboardButton("📱 UPI Payment", callback_data="pay_method_upi")],
+        [InlineKeyboardButton("🔀 Split Payment (UPI + Cash)", callback_data="pay_method_split")],
         [InlineKeyboardButton("❌ Cancel", callback_data="sub_cancel")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -459,6 +460,33 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
         
         logger.info(f"UPI QR generated for user {user_id}, amount {plan['amount']}")
         return ENTER_UPI_VERIFICATION
+    
+    elif payment_method == 'split':
+        # Split payment (UPI + Cash) - ask for UPI amount
+        total_amount = plan['amount']
+        context.user_data['split_total'] = total_amount
+        context.user_data['subscription_request_split'] = True
+        
+        await query.answer()
+        
+        message = (
+            f"*💳 Split Payment Setup*\n\n"
+            f"Plan: {plan['name']}\n"
+            f"Total Amount: Rs. {total_amount:,}\n\n"
+            f"Enter the amount you'd like to pay via *UPI*\n"
+            f"(Remaining will be collected as cash)\n\n"
+            f"_Example: For total Rs. 2500, enter 1000 to pay Rs. 1000 via UPI and Rs. 1500 via cash_"
+        )
+        
+        try:
+            await query.edit_message_text(message, parse_mode="Markdown")
+            logger.info(f"Split payment prompt shown to user {user_id}")
+        except Exception as e:
+            logger.error(f"Error editing message for user {user_id}: {e}")
+            await query.answer("Error loading split payment setup. Please try again.", show_alert=True)
+            return ConversationHandler.END
+        
+        return ENTER_SPLIT_UPI_AMOUNT
 
 
 async def callback_upi_payment_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -499,6 +527,227 @@ async def callback_upi_payment_done(update: Update, context: ContextTypes.DEFAUL
     
     logger.info(f"UPI payment verified for user {user_id}, amount {plan['amount']}")
     return ConversationHandler.END
+
+
+async def handle_split_upi_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user input for split payment UPI amount"""
+    user_id = update.effective_user.id
+    total_amount = context.user_data.get('split_total')
+    plan = context.user_data.get('selected_plan')
+    
+    if not total_amount or not plan:
+        await update.message.reply_text("❌ Payment setup expired. Please start again with /subscribe")
+        return ConversationHandler.END
+    
+    try:
+        upi_amount = float(update.message.text.strip())
+        
+        # Validate UPI amount
+        if upi_amount <= 0:
+            await update.message.reply_text(f"❌ UPI amount must be greater than 0. Try again:")
+            return ENTER_SPLIT_UPI_AMOUNT
+        
+        if upi_amount >= total_amount:
+            await update.message.reply_text(
+                f"❌ UPI amount must be less than total (Rs. {total_amount:,}). Try again:"
+            )
+            return ENTER_SPLIT_UPI_AMOUNT
+        
+        # Calculate cash amount
+        cash_amount = total_amount - upi_amount
+        
+        # Store split amounts
+        context.user_data['split_upi_amount'] = upi_amount
+        context.user_data['split_cash_amount'] = cash_amount
+        
+        # Show confirmation
+        keyboard = [
+            [InlineKeyboardButton("✅ Confirm", callback_data="split_confirm")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="split_cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = (
+            f"*🔀 Split Payment Summary*\n\n"
+            f"Plan: {plan['name']}\n"
+            f"Total Amount: Rs. {total_amount:,}\n\n"
+            f"💾 Breakdown:\n"
+            f"• UPI Payment: Rs. {upi_amount:,.0f}\n"
+            f"• Cash Payment: Rs. {cash_amount:,.0f}\n\n"
+            f"Is this correct?"
+        )
+        
+        await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+        logger.info(f"Split payment summary shown to user {user_id}: UPI={upi_amount}, Cash={cash_amount}")
+        
+        return ENTER_SPLIT_CONFIRM
+        
+    except ValueError:
+        await update.message.reply_text(f"❌ Please enter a valid amount (e.g., 1000). Try again:")
+        return ENTER_SPLIT_UPI_AMOUNT
+
+
+async def callback_split_confirm_or_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle split payment confirmation or cancellation"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    action = query.data.replace("split_", "")
+    
+    if action == 'cancel':
+        await query.answer()
+        await query.edit_message_text("❌ Split payment cancelled. Type /subscribe to try again.")
+        return ConversationHandler.END
+    
+    await query.answer()
+    
+    # Get payment details
+    plan_id = context.user_data.get('selected_plan_id')
+    plan = context.user_data.get('selected_plan')
+    upi_amount = context.user_data.get('split_upi_amount')
+    cash_amount = context.user_data.get('split_cash_amount')
+    total_amount = context.user_data.get('split_total')
+    
+    if not all([plan_id, plan, upi_amount, cash_amount]):
+        await query.answer("Payment data expired. Please /subscribe again.", show_alert=True)
+        return ConversationHandler.END
+    
+    # Verify user exists
+    user = get_user(user_id)
+    if not user:
+        logger.error(f"User {user_id} not found in database when confirming split payment")
+        await query.answer("❌ User profile not found. Please /start and register again.", show_alert=True)
+        return ConversationHandler.END
+    
+    # Create split payment request (with method='split' for now)
+    sub_request = create_subscription_request(user_id, plan_id, total_amount, 'split')
+    
+    if not sub_request:
+        logger.error(f"Failed to create split payment subscription request for user {user_id}")
+        await query.edit_message_text(
+            "⚠️ *Split Payment Error*\n\n"
+            "There was an issue processing your payment.\n"
+            "Please try again in a moment or contact support."
+        )
+        return ConversationHandler.END
+    
+    context.user_data['subscription_request_id'] = sub_request['id']
+    
+    # Generate UPI QR for the UPI portion
+    try:
+        from src.utils.upi_qrcode import generate_upi_qr_code, get_upi_id
+        
+        transaction_ref = f"SPLIT{user_id}{int(datetime.now().timestamp())}"
+        qr_bytes = generate_upi_qr_code(upi_amount, query.from_user.full_name, transaction_ref)
+        
+        if not qr_bytes:
+            logger.error(f"Failed to generate UPI QR for split payment")
+            await query.edit_message_text(
+                "❌ Error generating UPI QR code. Please try cash payment instead."
+            )
+            return ConversationHandler.END
+        
+        context.user_data['transaction_ref'] = transaction_ref
+        context.user_data['screenshot_file_id'] = None
+        
+        # Send UPI QR for the UPI portion
+        upi_id = get_upi_id()
+        
+        keyboard = [
+            [InlineKeyboardButton("📸 Upload Screenshot", callback_data="split_upi_upload_screenshot")],
+            [InlineKeyboardButton("⏭️ Skip for Now", callback_data="split_upi_skip_screenshot")],
+            [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sub_cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        caption = (
+            f"*💳 Split Payment - UPI QR Code*\n\n"
+            f"Plan: {plan['name']}\n"
+            f"*UPI Amount: Rs. {upi_amount:,.0f}*\n"
+            f"Cash Amount: Rs. {cash_amount:,.0f}\n"
+            f"Reference: {transaction_ref}\n\n"
+            f"*UPI ID:* `{upi_id}`\n"
+            f"_(Tap to copy)_\n\n"
+            f"*How to Pay:*\n"
+            f"1️⃣ Scan the QR code below with any UPI app\n"
+            f"2️⃣ OR Copy the UPI ID above and pay via PhonePe/GPay/Paytm\n"
+            f"3️⃣ Enter amount: Rs. {upi_amount:,.0f}\n\n"
+            f"After UPI payment, upload the screenshot for verification.\n"
+            f"The admin will confirm cash collection separately. 💵"
+        )
+        
+        await query.message.reply_photo(
+            photo=qr_bytes,
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+        
+        # Send split payment notification to admins
+        try:
+            from src.handlers.admin_handlers import get_admin_ids
+            
+            admin_ids = get_admin_ids()
+            logger.info(f"Split payment: Found {len(admin_ids)} admins")
+            
+            user_data = get_user(user_id)
+            profile_pic_url = user_data.get('profile_pic_url') if user_data else None
+            
+            admin_caption = (
+                f"*🔀 Split Payment Request - Admin Review*\n\n"
+                f"User: {query.from_user.full_name} (ID: {user_id})\n"
+                f"Plan: {plan['name']}\n"
+                f"Total Amount: Rs. {total_amount:,}\n\n"
+                f"*Payment Breakdown:*\n"
+                f"• UPI: Rs. {upi_amount:,.0f}\n"
+                f"• Cash: Rs. {cash_amount:,.0f}\n\n"
+                f"Request ID: {sub_request['id']}\n"
+                f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"*Action:* Verify UPI receipt. Confirm cash collection once received."
+            )
+            
+            admin_keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve UPI", callback_data=f"admin_approve_split_upi_{sub_request['id']}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_split_{sub_request['id']}"),
+                ]
+            ]
+            admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
+            
+            for admin_id in admin_ids:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=qr_bytes,
+                        caption=admin_caption,
+                        reply_markup=admin_reply_markup,
+                        parse_mode="Markdown"
+                    )
+                    logger.info(f"✅ Split payment notification sent to admin {admin_id}")
+                    
+                    if profile_pic_url:
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=admin_id,
+                                photo=profile_pic_url,
+                                caption="📸 User Profile Picture"
+                            )
+                        except Exception as e:
+                            logger.debug(f"Could not send profile picture: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to send split payment notification to admin {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error in split payment admin notification: {e}", exc_info=True)
+        
+        logger.info(f"Split payment initialized: User {user_id}, Total {total_amount}, UPI {upi_amount}, Cash {cash_amount}")
+        return ENTER_UPI_VERIFICATION
+        
+    except Exception as e:
+        logger.error(f"Error processing split payment: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Error processing split payment. Please contact admin."
+        )
+        return ConversationHandler.END
 
 
 async def callback_cancel_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -831,6 +1080,278 @@ async def callback_admin_approve_cash(update: Update, context: ContextTypes.DEFA
                 pass
 
 
+async def callback_admin_approve_split_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Approve UPI portion of split payment"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    request_id = int(query.data.split("_")[-1])
+    
+    try:
+        await query.answer()
+    except Exception as answer_err:
+        logger.warning(f"Split UPI approve: query.answer failed: {answer_err}")
+    
+    try:
+        from src.database.subscription_operations import (
+            get_subscription_request_details, approve_subscription,
+            get_receivable_by_source
+        )
+        
+        # Get request details
+        request_details = get_subscription_request_details(request_id)
+        if not request_details:
+            await query.edit_message_text("❌ Request not found")
+            return
+        
+        user_id = request_details['user_id']
+        plan_id = request_details['plan_id']
+        
+        # Get receivable to check split amounts
+        receivable = get_receivable_by_source('subscription', request_id)
+        if not receivable:
+            await query.edit_message_text("❌ Payment record not found")
+            return
+        
+        # Get split breakdown
+        from src.database.ar_operations import get_receivable_breakdown
+        breakdown = get_receivable_breakdown(receivable.get('receivable_id'))
+        
+        upi_amount = breakdown.get('methods', {}).get('upi', 0)
+        cash_amount = breakdown.get('methods', {}).get('cash', 0)
+        total_amount = upi_amount + cash_amount
+        
+        # Auto-approve subscription with the total amount (both UPI and pending cash)
+        plan = SUBSCRIPTION_PLANS.get(plan_id, {})
+        end_date = datetime.now() + timedelta(days=plan.get('duration_days', 30))
+        
+        success = approve_subscription(request_id, total_amount, end_date)
+        
+        if success:
+            # Notify user
+            user = get_user(user_id)
+            if user and user.get('user_id'):
+                try:
+                    message = (
+                        f"✅ *Split Payment - UPI Approved*\n\n"
+                        f"Plan: {plan.get('name', 'Unknown')}\n"
+                        f"*Total: Rs. {total_amount:,.0f}*\n\n"
+                        f"*Payment Status:*\n"
+                        f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅ Confirmed\n"
+                        f"• 💵 Cash: Rs. {cash_amount:,.0f} (Admin will confirm)\n\n"
+                        f"Your subscription is now active!\n"
+                        f"Admin is collecting the cash portion. 🎉"
+                    )
+                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                    logger.info(f"✅ Split UPI approval notification sent to user {user_id}")
+                except Exception as e:
+                    logger.debug(f"Could not send approval notification to user: {e}")
+            
+            # Schedule payment reminders for outstanding cash balance
+            try:
+                from src.utils.event_dispatcher import schedule_followups
+                
+                if cash_amount > 0 and context and getattr(context, 'application', None):
+                    schedule_followups(
+                        context.application, user_id, 'PAYMENT_REMINDER_1',
+                        {'name': request_details.get('user_name', ''), 'amount': cash_amount}
+                    )
+                    logger.info(f"Payment reminder scheduled for split payment cash balance: User {user_id}, Amount {cash_amount}")
+            except Exception as e:
+                logger.debug(f"Could not schedule payment reminders for split payment: {e}")
+            
+            await query.edit_message_text(
+                f"✅ *Split Payment - UPI Approved*\n\n"
+                f"User: {request_details.get('user_name', 'Unknown')}\n"
+                f"Plan: {plan.get('name', 'Unknown')}\n"
+                f"Total: Rs. {total_amount:,.0f}\n\n"
+                f"*Breakdown:*\n"
+                f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅\n"
+                f"• 💵 Cash: Rs. {cash_amount:,.0f} (Pending)\n\n"
+                f"Subscription activated. Admin can now confirm cash payment."
+            )
+            logger.info(f"Admin {query.from_user.id} approved split UPI payment for request {request_id}")
+        else:
+            await query.edit_message_text("❌ Failed to approve subscription")
+            logger.error(f"Failed to approve subscription for request {request_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in callback_admin_approve_split_upi: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error approving UPI payment")
+        except:
+            pass
+
+
+async def callback_admin_confirm_split_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Confirm cash portion of split payment"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    request_id = int(query.data.split("_")[-1])
+    
+    try:
+        await query.answer()
+    except Exception as answer_err:
+        logger.warning(f"Split cash confirm: query.answer failed: {answer_err}")
+    
+    try:
+        from src.database.subscription_operations import (
+            get_subscription_request_details, record_split_cash_payment,
+            get_receivable_by_source
+        )
+        from src.database.ar_operations import get_receivable_breakdown
+        
+        # Get request details
+        request_details = get_subscription_request_details(request_id)
+        if not request_details:
+            await query.edit_message_text("❌ Request not found")
+            return
+        
+        user_id = request_details['user_id']
+        
+        # Get receivable and confirm cash
+        receivable = get_receivable_by_source('subscription', request_id)
+        if not receivable:
+            await query.edit_message_text("❌ Payment record not found")
+            return
+        
+        # Record cash payment
+        success = record_split_cash_payment(user_id, request_id)
+        
+        if success:
+            # Get updated breakdown
+            breakdown = get_receivable_breakdown(receivable.get('receivable_id'))
+            upi_amount = breakdown.get('methods', {}).get('upi', 0)
+            cash_amount = breakdown.get('methods', {}).get('cash', 0)
+            status = breakdown.get('receivable', {}).get('status', 'unknown')
+            
+            # Cancel payment reminders since payment is now complete
+            try:
+                if context and getattr(context, 'application', None):
+                    # Get jobs for this user's payment reminders
+                    job_names = [
+                        f"payment_reminder_1_{user_id}",
+                        f"payment_reminder_2_{user_id}",
+                    ]
+                    for job_name in job_names:
+                        try:
+                            jobs = context.application.job_queue.get_jobs_by_name(job_name)
+                            for job in jobs:
+                                job.schedule_removal()
+                            logger.info(f"[SCHEDULER] Cancelled payment reminder job: {job_name}")
+                        except Exception as e:
+                            logger.debug(f"Could not cancel job {job_name}: {e}")
+            except Exception as e:
+                logger.debug(f"Could not cancel payment reminders: {e}")
+            
+            # Notify user
+            user = get_user(user_id)
+            if user and user.get('user_id'):
+                try:
+                    message = (
+                        f"✅ *Split Payment - Cash Confirmed*\n\n"
+                        f"*Payment Complete!*\n"
+                        f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅\n"
+                        f"• 💵 Cash: Rs. {cash_amount:,.0f} ✅\n\n"
+                        f"Status: PAID\n"
+                        f"Your subscription is fully active. 🎉"
+                    )
+                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                    logger.info(f"✅ Split cash confirmation notification sent to user {user_id}")
+                except Exception as e:
+                    logger.debug(f"Could not send cash confirmation to user: {e}")
+            
+            await query.edit_message_text(
+                f"✅ *Split Payment - Cash Confirmed*\n\n"
+                f"User: {request_details.get('user_name', 'Unknown')}\n"
+                f"• UPI: Rs. {upi_amount:,.0f} ✅\n"
+                f"• Cash: Rs. {cash_amount:,.0f} ✅\n\n"
+                f"Status: {status.upper()}\n"
+                f"Payment fully settled."
+            )
+            logger.info(f"Admin {query.from_user.id} confirmed split cash payment for request {request_id}")
+        else:
+            await query.edit_message_text("❌ Failed to confirm cash payment")
+            logger.error(f"Failed to confirm cash for request {request_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in callback_admin_confirm_split_cash: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error confirming cash payment")
+        except:
+            pass
+
+
+async def callback_admin_reject_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Reject split payment request"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    request_id = int(query.data.split("_")[-1])
+    
+    try:
+        await query.answer()
+    except Exception as answer_err:
+        logger.warning(f"Split reject: query.answer failed: {answer_err}")
+    
+    try:
+        from src.database.subscription_operations import (
+            get_subscription_request_details, reject_subscription
+        )
+        
+        # Get request details
+        request_details = get_subscription_request_details(request_id)
+        if not request_details:
+            await query.edit_message_text("❌ Request not found")
+            return
+        
+        user_id = request_details['user_id']
+        
+        # Reject subscription
+        reason = "Split payment rejected by admin"
+        reject_subscription(request_id, reason)
+        
+        # Notify user
+        user = get_user(user_id)
+        if user and user.get('user_id'):
+            try:
+                message = (
+                    f"❌ *Split Payment - Rejected*\n\n"
+                    f"Your split payment request has been rejected.\n"
+                    f"Please contact the admin or try again."
+                )
+                await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                logger.info(f"❌ Split payment rejection notification sent to user {user_id}")
+            except Exception as e:
+                logger.debug(f"Could not send rejection notification: {e}")
+        
+        await query.edit_message_text(
+            f"❌ *Split Payment - Rejected*\n\n"
+            f"User: {request_details.get('user_name', 'Unknown')}\n"
+            f"Reason: {reason}\n\n"
+            f"User has been notified."
+        )
+        logger.info(f"Admin {query.from_user.id} rejected split payment for request {request_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in callback_admin_reject_split: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error rejecting payment")
+        except:
+            pass
+
+
+
 async def callback_admin_reject_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: Reject cash subscription payment"""
     query = update.callback_query
@@ -989,6 +1510,19 @@ async def callback_approve_with_date(update: Update, context: ContextTypes.DEFAU
                 parse_mode="Markdown"
             )
             logger.info(f"Admin {query.from_user.id} approved {payment_method} subscription {request_id} with amount {amount} and end date {end_date}")
+            # If there's an accounts_receivable for this subscription and outstanding balance, schedule payment reminders
+            try:
+                from src.database.ar_operations import get_receivable_breakdown, get_receivable_by_source
+                from src.utils.event_dispatcher import schedule_followups
+                rec = None
+                rr = get_receivable_by_source('subscription', request_id)
+                if rr:
+                    rec = get_receivable_breakdown(rr.get('receivable_id'))
+                balance = rec.get('balance', 0) if rec else 0
+                if balance and balance > 0 and context and getattr(context, 'application', None):
+                    schedule_followups(context.application, request_details['user_id'], 'PAYMENT_REMINDER_1', {'name': request_details.get('user_name',''), 'amount': balance})
+            except Exception:
+                logger.debug('Could not schedule follow-ups for subscription approval')
         else:
             # Better error message
             error_msg = (
@@ -1098,6 +1632,19 @@ async def callback_approve_sub_standard(update: Update, context: ContextTypes.DE
             f"✓ User notified",
             parse_mode="Markdown"
         )
+        # Schedule payment follow-ups if receivable still has outstanding balance
+        try:
+            from src.database.ar_operations import get_receivable_breakdown, get_receivable_by_source
+            from src.utils.event_dispatcher import schedule_followups
+            rec_row = get_receivable_by_source('subscription', sub_id)
+            receivable_id = rec_row.get('receivable_id') if rec_row else None
+            if receivable_id:
+                breakdown = get_receivable_breakdown(receivable_id)
+                balance = breakdown.get('balance', 0)
+                if balance and balance > 0 and context and getattr(context, 'application', None):
+                    schedule_followups(context.application, sub['user_id'], 'PAYMENT_REMINDER_1', {'name': sub.get('full_name',''), 'amount': balance})
+        except Exception:
+            logger.debug('Could not schedule follow-ups for subscription approval')
     else:
         await query.edit_message_text("❌ Error approving subscription")
 
@@ -1414,10 +1961,104 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
     plan = context.user_data.get('selected_plan')
     transaction_ref = context.user_data.get('transaction_ref')
     
+    # Check if this is a split payment
+    is_split = context.user_data.get('subscription_request_split', False)
+    split_upi_amount = context.user_data.get('split_upi_amount')
+    split_cash_amount = context.user_data.get('split_cash_amount')
+    
     if not request_id or not plan:
         await query.message.reply_text("❌ Payment data not found")
         return ConversationHandler.END
     
+    # For split payments, create AR receivable with both lines
+    if is_split and split_upi_amount and split_cash_amount:
+        from src.database.subscription_operations import (
+            create_split_payment_receivable, record_split_upi_payment
+        )
+        
+        # Create split receivable
+        split_result = create_split_payment_receivable(user_id, request_id, split_upi_amount, split_cash_amount)
+        if not split_result:
+            await query.message.reply_text("❌ Error creating split payment ledger. Please contact admin.")
+            return ConversationHandler.END
+        
+        # Record UPI payment
+        record_split_upi_payment(user_id, request_id, split_upi_amount, transaction_ref)
+        
+        keyboard = [
+            [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✅ *Split Payment Submitted*\n\n"
+            f"Plan: {plan['name']}\n"
+            f"*Total Amount: Rs. {(split_upi_amount + split_cash_amount):,.0f}*\n\n"
+            f"*Payment Breakdown:*\n"
+            f"• 📱 UPI: Rs. {split_upi_amount:,.0f} (Reference: {transaction_ref})\n"
+            f"• 💵 Cash: Rs. {split_cash_amount:,.0f} (Pending Confirmation)\n\n"
+            f"Your UPI payment has been submitted for verification.\n"
+            f"The admin will confirm cash collection separately.\n"
+            f"Your subscription will be activated once both payments are confirmed. 🎉\n\n"
+            f"If you have any questions, reach out on WhatsApp.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        
+        # Send split payment notification to admins
+        try:
+            from src.handlers.admin_handlers import get_admin_ids
+            from datetime import datetime
+            
+            admin_ids = get_admin_ids()
+            logger.info(f"Split payment (no screenshot): Found {len(admin_ids)} admins to notify")
+            
+            admin_caption = (
+                f"*🔀 Split Payment Request - Admin Review*\n\n"
+                f"User: {query.from_user.full_name} (ID: {user_id})\n"
+                f"Plan: {plan['name']}\n"
+                f"*Total: Rs. {(split_upi_amount + split_cash_amount):,.0f}*\n\n"
+                f"*Payment Breakdown:*\n"
+                f"• 📱 UPI: Rs. {split_upi_amount:,.0f}\n"
+                f"  Reference: {transaction_ref}\n"
+                f"• 💵 Cash: Rs. {split_cash_amount:,.0f}\n"
+                f"  Status: Awaiting confirmation\n\n"
+                f"Request ID: {request_id}\n"
+                f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n"
+                f"Screenshot: ❌ Not attached\n\n"
+                f"*Action:* Verify UPI payment and confirm/request cash payment."
+            )
+            
+            admin_keyboard = [
+                [InlineKeyboardButton("✅ Approve UPI", callback_data=f"admin_approve_split_upi_{request_id}")],
+                [InlineKeyboardButton("✅ Confirm Cash", callback_data=f"admin_confirm_split_cash_{request_id}")],
+                [InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_split_{request_id}")],
+            ]
+            admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
+            
+            user_data = get_user(user_id)
+            profile_pic_url = user_data.get('profile_pic_url') if user_data else None
+            
+            for admin_id in admin_ids:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=admin_caption, reply_markup=admin_reply_markup, parse_mode="Markdown")
+                    
+                    if profile_pic_url:
+                        try:
+                            await context.bot.send_photo(chat_id=admin_id, photo=profile_pic_url, caption="📸 User Profile Picture")
+                        except Exception as e:
+                            logger.debug(f"Could not send profile picture: {e}")
+                    
+                    logger.info(f"✅ Split payment notification sent to admin {admin_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send split payment notification to admin {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error in split payment admin notification: {e}", exc_info=True)
+        
+        logger.info(f"Split payment submitted (no screenshot): User {user_id}, UPI {split_upi_amount}, Cash {split_cash_amount}")
+        return ConversationHandler.END
+    
+    # Regular UPI payment (non-split)
     # Record payment without screenshot
     from src.database.subscription_operations import record_payment
     payment = record_payment(user_id, request_id, plan['amount'], 'upi', transaction_ref, None)
@@ -1642,6 +2283,12 @@ def get_subscription_conversation_handler():
             ADMIN_SELECT_DATE: [
                 CallbackQueryHandler(callback_select_end_date, pattern="^sub_date_"),
             ],
+            ENTER_SPLIT_UPI_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_split_upi_amount_input),
+            ],
+            ENTER_SPLIT_CONFIRM: [
+                CallbackQueryHandler(callback_split_confirm_or_cancel, pattern="^split_(confirm|cancel)$"),
+            ],
         },
         fallbacks=[],
         per_message=False
@@ -1654,6 +2301,9 @@ def get_admin_approval_conversation_handler():
         entry_points=[
             CallbackQueryHandler(callback_admin_approve_upi, pattern="^admin_approve_upi_"),
             CallbackQueryHandler(callback_admin_approve_cash, pattern="^admin_approve_cash_"),
+            CallbackQueryHandler(callback_admin_approve_split_upi, pattern="^admin_approve_split_upi_"),
+            CallbackQueryHandler(callback_admin_confirm_split_cash, pattern="^admin_confirm_split_cash_"),
+            CallbackQueryHandler(callback_admin_reject_split, pattern="^admin_reject_split_"),
         ],
         states={
             ADMIN_ENTER_AMOUNT: [
