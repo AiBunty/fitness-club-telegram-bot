@@ -74,8 +74,9 @@ async def callback_confirm_buy_credits(update: Update, context: ContextTypes.DEF
     
     # Show payment method selection
     keyboard = [
+        [InlineKeyboardButton("� UPI Payment", callback_data="shake_pay_upi")],
         [InlineKeyboardButton("💵 Cash Payment", callback_data="shake_pay_cash")],
-        [InlineKeyboardButton("📱 UPI Payment", callback_data="shake_pay_upi")],
+        [InlineKeyboardButton("⏳ Pay Later (Credit)", callback_data="shake_pay_credit")],
         [InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]
     ]
     
@@ -95,7 +96,7 @@ async def callback_select_shake_payment(update: Update, context: ContextTypes.DE
     """Handle shake credit payment method selection"""
     query = update.callback_query
     user_id = query.from_user.id
-    payment_method = query.data.split("_")[2]  # 'cash' or 'upi'
+    payment_method = query.data.split("_")[2]  # 'cash', 'upi' or 'credit'
     
     credits = context.user_data.get('shake_credits_to_buy', CREDITS_PER_PURCHASE)
     amount = context.user_data.get('shake_credits_amount', CREDIT_COST)
@@ -230,6 +231,116 @@ async def callback_select_shake_payment(update: Update, context: ContextTypes.DE
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
+        
+        return ConversationHandler.END
+    
+    elif payment_method == 'credit':
+        # Pay later (credit) - create purchase request with credit method
+        purchase_request = create_purchase_request(user_id, credits, 'credit')
+        
+        if not purchase_request:
+            await query.edit_message_text(
+                "❌ *Purchase Error*\n\n"
+                "Failed to create purchase request. Please try again.",
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+        
+        context.user_data['shake_purchase_id'] = purchase_request['purchase_id']
+        
+        # Create AR receivable for full amount
+        try:
+            from src.database.ar_operations import create_receivable
+            from src.utils.event_dispatcher import schedule_followups
+            
+            receivable = create_receivable(
+                user_id=user_id,
+                receivable_type='shake_purchase',
+                source_id=purchase_request['purchase_id'],
+                bill_amount=amount,
+                final_amount=amount
+            )
+            
+            # Trigger payment reminders immediately
+            schedule_followups(context.application, user_id, 'PAYMENT_REMINDER_1', {
+                'receivable_id': receivable['receivable_id'],
+                'amount': amount,
+                'type': 'Shake Credits',
+                'user_name': query.from_user.full_name
+            })
+            
+            logger.info(f"Created AR receivable {receivable['receivable_id']} for shake credit purchase {purchase_request['purchase_id']}")
+        except Exception as e:
+            logger.error(f"Error creating AR receivable for shake credit: {e}", exc_info=True)
+        
+        # Show confirmation message to user
+        await query.edit_message_text(
+            f"✅ *Pay Later (Credit) - Activated*\n\n"
+            f"🥤 Credits: {credits}\n"
+            f"💵 Amount: Rs {amount:,.2f}\n"
+            f"📝 Payment Method: ⏳ Pay Later (Credit)\n\n"
+            f"Your purchase request is pending admin approval.\n"
+            f"Payment reminders will be sent to your registered contact.",
+            parse_mode='Markdown'
+        )
+        
+        # Notify admins with approve/reject buttons
+        try:
+            from src.handlers.admin_handlers import get_admin_ids
+            from src.database.user_operations import get_user
+            
+            admin_ids = get_admin_ids()
+            user_data = get_user(user_id)
+            profile_pic_url = user_data.get('profile_pic_url') if user_data else None
+            
+            admin_text = (
+                f"*⏳ Shake Credit Purchase - Pay Later (Credit)*\n\n"
+                f"User: {query.from_user.full_name} (ID: {user_id})\n"
+                f"Credits: {credits}\n"
+                f"Amount: Rs {amount:,}\n"
+                f"Payment Method: ⏳ Pay Later (Credit)\n\n"
+                f"Request ID: {purchase_request['purchase_id']}\n"
+                f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"⚠️ This is a CREDIT order. User will be sent payment reminders."
+            )
+            
+            admin_keyboard = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_shake_purchase_{purchase_request['purchase_id']}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_shake_purchase_{purchase_request['purchase_id']}")
+                ]
+            ]
+            
+            for admin_id in admin_ids:
+                try:
+                    if profile_pic_url:
+                        try:
+                            await context.bot.send_photo(
+                                chat_id=admin_id,
+                                photo=profile_pic_url,
+                                caption=admin_text,
+                                reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                                parse_mode='Markdown'
+                            )
+                        except:
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=admin_text,
+                                reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                                parse_mode='Markdown'
+                            )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=admin_text,
+                            reply_markup=InlineKeyboardMarkup(admin_keyboard),
+                            parse_mode='Markdown'
+                        )
+                    logger.info(f"Shake credit pay later notification sent to admin {admin_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification to admin {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error sending admin notifications: {e}")
         
         return ConversationHandler.END
 

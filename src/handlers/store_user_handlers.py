@@ -306,6 +306,7 @@ async def store_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💰 Full Payment", callback_data="store_pay:FULL")],
         [InlineKeyboardButton("🏦 Partial Payment", callback_data="store_pay:PARTIAL")],
         [InlineKeyboardButton("🔄 Credit / Pay Later", callback_data="store_pay:CREDIT")],
+        [InlineKeyboardButton("🔀 Split (UPI + Cash)", callback_data="store_pay:SPLIT")],
         [InlineKeyboardButton("🏪 Back", callback_data="store_cart")]
     ]
     
@@ -363,6 +364,8 @@ async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TY
         order_text += "Please provide partial payment amount via admin."
     elif payment_method == 'CREDIT':
         order_text += "Credit order created. Payment reminder will be sent."
+    elif payment_method == 'SPLIT':
+        order_text += "Split payment (UPI + Cash) order created. You'll be contacted with payment instructions."
     
     order_text += "\n\nAdmin will review and confirm your order."
     
@@ -397,9 +400,9 @@ async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception:
         logger.debug('Could not schedule follow-ups for STORE_ORDER_PLACED')
 
-    # Notify admins for new orders so they can review and act (Full / Partial / Credit)
+    # Notify admins for new orders so they can review and act (Full / Partial / Credit / Split)
     try:
-        notify_methods = ('FULL', 'PARTIAL', 'CREDIT')
+        notify_methods = ('FULL', 'PARTIAL', 'CREDIT', 'SPLIT')
         if payment_method in notify_methods:
             admin_ids = get_moderator_chat_ids(include_staff=False)
 
@@ -410,6 +413,9 @@ async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TY
             elif payment_method == 'PARTIAL':
                 admin_message_header = "🛒 *New Partial-Payment Order*"
                 admin_message_body = "⚠️ Payment Terms: *Partial Payment*\n\nOpen the order to record partial payment or follow up."
+            elif payment_method == 'SPLIT':
+                admin_message_header = "🛒 *New Split-Payment Order*"
+                admin_message_body = "⚠️ Payment Terms: *Split (UPI + Cash)*\n\nOpen the order to collect payments via both methods."
             else:
                 admin_message_header = "🛒 *New Full-Payment Order*"
                 admin_message_body = "ℹ️ Payment Method: *Full Payment*\n\nOpen the order to confirm payment receipt."

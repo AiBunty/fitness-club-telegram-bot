@@ -192,8 +192,9 @@ async def callback_confirm_subscription(update: Update, context: ContextTypes.DE
     
     # Show payment method selection
     keyboard = [
+        [InlineKeyboardButton("� UPI Payment", callback_data="pay_method_upi")],
         [InlineKeyboardButton("💵 Cash Payment", callback_data="pay_method_cash")],
-        [InlineKeyboardButton("📱 UPI Payment", callback_data="pay_method_upi")],
+        [InlineKeyboardButton("⏳ Pay Later (Credit)", callback_data="pay_method_credit")],
         [InlineKeyboardButton("🔀 Split Payment (UPI + Cash)", callback_data="pay_method_split")],
         [InlineKeyboardButton("❌ Cancel", callback_data="sub_cancel")],
     ]
@@ -460,6 +461,123 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
         
         logger.info(f"UPI QR generated for user {user_id}, amount {plan['amount']}")
         return ENTER_UPI_VERIFICATION
+    
+    elif payment_method == 'credit':
+        # Pay Later (Credit) - full amount outstanding
+        total_amount = plan['amount']
+        sub_request = create_subscription_request(user_id, plan_id, total_amount, 'credit')
+        
+        if not sub_request:
+            logger.error(f"Failed to create pay later subscription request for user {user_id}")
+            await query.edit_message_text(
+                "⚠️ *Pay Later Error*\n\n"
+                "There was an issue processing your pay later request.\n"
+                "Please try again in a moment or contact support."
+            )
+            return ConversationHandler.END
+        
+        context.user_data['subscription_request_id'] = sub_request['id']
+        
+        # Create AR receivable for full amount (credit)
+        try:
+            from src.database.ar_operations import create_receivable, get_receivable_by_source
+            from src.utils.event_dispatcher import schedule_followups
+            
+            # Create receivable for full amount
+            receivable = create_receivable(
+                user_id=user_id,
+                receivable_type='subscription',
+                source_id=sub_request['id'],
+                bill_amount=total_amount,
+                discount_amount=0.0,
+                final_amount=total_amount
+            )
+            
+            if receivable:
+                # Schedule payment reminders immediately
+                if context and getattr(context, 'application', None):
+                    schedule_followups(
+                        context.application, user_id, 'PAYMENT_REMINDER_1',
+                        {'name': query.from_user.full_name, 'amount': total_amount}
+                    )
+                    logger.info(f"Payment reminders scheduled for pay later credit: User {user_id}, Amount {total_amount}")
+            
+            # Notify admins about pay later request
+            try:
+                from src.handlers.admin_handlers import get_admin_ids
+                
+                admin_ids = get_admin_ids()
+                user_data = get_user(user_id)
+                profile_pic_url = user_data.get('profile_pic_url') if user_data else None
+                
+                admin_caption = (
+                    f"*⏳ Pay Later (Credit) Request - Admin Review*\n\n"
+                    f"User: {query.from_user.full_name} (ID: {user_id})\n"
+                    f"Plan: {plan['name']}\n"
+                    f"Amount: Rs. {total_amount:,}\n"
+                    f"Payment Method: ⏳ Pay Later (Credit)\n\n"
+                    f"Request ID: {sub_request['id']}\n"
+                    f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
+                    f"*Status:* Credit activated. Full amount outstanding.\n"
+                    f"User will receive payment reminders."
+                )
+                
+                admin_keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_credit_{sub_request['id']}"),
+                        InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_credit_{sub_request['id']}"),
+                    ]
+                ]
+                admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
+                
+                for admin_id in admin_ids:
+                    try:
+                        if profile_pic_url:
+                            await context.bot.send_photo(
+                                chat_id=admin_id,
+                                photo=profile_pic_url,
+                                caption=admin_caption,
+                                reply_markup=admin_reply_markup,
+                                parse_mode="Markdown"
+                            )
+                        else:
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=admin_caption,
+                                reply_markup=admin_reply_markup,
+                                parse_mode="Markdown"
+                            )
+                        logger.info(f"Pay later notification sent to admin {admin_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send pay later notification to admin {admin_id}: {e}")
+            except Exception as e:
+                logger.error(f"Error in pay later admin notification: {e}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"Error processing pay later credit: {e}", exc_info=True)
+        
+        # Show confirmation to user
+        keyboard = [
+            [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
+            [InlineKeyboardButton("📞 Contact Admin", callback_data="admin_contact")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✅ *Pay Later (Credit) - Activated*\n\n"
+            f"Plan: {plan['name']}\n"
+            f"Amount: Rs. {total_amount:,}\n"
+            f"Payment Method: ⏳ Credit\n\n"
+            f"Your credit has been activated for this subscription.\n"
+            f"You will receive payment reminders to settle the outstanding amount.\n"
+            f"Your subscription is now active. 🎉\n\n"
+            f"Questions? Reach out on WhatsApp or contact admin.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        
+        logger.info(f"Pay later (credit) subscription created: User {user_id}, Plan {plan_id}, Amount {total_amount}")
+        return ConversationHandler.END
     
     elif payment_method == 'split':
         # Split payment (UPI + Cash) - ask for UPI amount
@@ -1350,6 +1468,141 @@ async def callback_admin_reject_split(update: Update, context: ContextTypes.DEFA
         except:
             pass
 
+
+async def callback_admin_approve_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Approve pay later (credit) subscription"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    request_id = int(query.data.split("_")[-1])
+    
+    try:
+        await query.answer()
+    except Exception as answer_err:
+        logger.warning(f"Credit approve: query.answer failed: {answer_err}")
+    
+    try:
+        from src.database.subscription_operations import (
+            get_subscription_request_details, approve_subscription,
+            get_receivable_by_source
+        )
+        
+        # Get request details
+        request_details = get_subscription_request_details(request_id)
+        if not request_details:
+            await query.edit_message_text("❌ Request not found")
+            return
+        
+        user_id = request_details['user_id']
+        plan_id = request_details['plan_id']
+        total_amount = request_details['amount']
+        
+        # Auto-approve subscription for full amount
+        plan = SUBSCRIPTION_PLANS.get(plan_id, {})
+        end_date = datetime.now() + timedelta(days=plan.get('duration_days', 30))
+        
+        success = approve_subscription(request_id, total_amount, end_date)
+        
+        if success:
+            # Notify user
+            user = get_user(user_id)
+            if user and user.get('user_id'):
+                try:
+                    message = (
+                        f"✅ *Pay Later (Credit) - Approved*\n\n"
+                        f"Plan: {plan.get('name', 'Unknown')}\n"
+                        f"Amount: Rs. {total_amount:,}\n\n"
+                        f"Your subscription is now active!\n"
+                        f"Payment reminders will be sent to settle the outstanding amount. 🎉"
+                    )
+                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                    logger.info(f"✅ Credit approval notification sent to user {user_id}")
+                except Exception as e:
+                    logger.debug(f"Could not send approval notification to user: {e}")
+            
+            await query.edit_message_text(
+                f"✅ *Pay Later (Credit) - Approved*\n\n"
+                f"User: {request_details.get('user_name', 'Unknown')}\n"
+                f"Plan: {plan.get('name', 'Unknown')}\n"
+                f"Amount: Rs. {total_amount:,}\n\n"
+                f"Subscription activated. Payment reminders will be sent."
+            )
+            logger.info(f"Admin {query.from_user.id} approved credit payment for request {request_id}")
+        else:
+            await query.edit_message_text("❌ Failed to approve subscription")
+            logger.error(f"Failed to approve subscription for request {request_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in callback_admin_approve_credit: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error approving credit payment")
+        except:
+            pass
+
+
+async def callback_admin_reject_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Reject pay later (credit) subscription"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    
+    request_id = int(query.data.split("_")[-1])
+    
+    try:
+        await query.answer()
+    except Exception as answer_err:
+        logger.warning(f"Credit reject: query.answer failed: {answer_err}")
+    
+    try:
+        from src.database.subscription_operations import (
+            get_subscription_request_details, reject_subscription
+        )
+        
+        # Get request details
+        request_details = get_subscription_request_details(request_id)
+        if not request_details:
+            await query.edit_message_text("❌ Request not found")
+            return
+        
+        user_id = request_details['user_id']
+        reason = "Pay later (credit) request rejected by admin"
+        
+        # Reject subscription
+        reject_subscription(request_id, reason)
+        
+        # Notify user
+        user = get_user(user_id)
+        if user and user.get('user_id'):
+            try:
+                message = (
+                    f"❌ *Pay Later (Credit) - Rejected*\n\n"
+                    f"Your pay later request has been rejected.\n"
+                    f"Please contact the admin or try another payment method."
+                )
+                await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                logger.info(f"❌ Credit rejection notification sent to user {user_id}")
+            except Exception as e:
+                logger.debug(f"Could not send rejection notification: {e}")
+        
+        await query.edit_message_text(
+            f"❌ *Pay Later (Credit) - Rejected*\n\n"
+            f"User: {request_details.get('user_name', 'Unknown')}\n"
+            f"Reason: {reason}\n\n"
+            f"User has been notified."
+        )
+        logger.info(f"Admin {query.from_user.id} rejected credit payment for request {request_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in callback_admin_reject_credit: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error rejecting credit payment")
+        except:
+            pass
 
 
 async def callback_admin_reject_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2304,6 +2557,8 @@ def get_admin_approval_conversation_handler():
             CallbackQueryHandler(callback_admin_approve_split_upi, pattern="^admin_approve_split_upi_"),
             CallbackQueryHandler(callback_admin_confirm_split_cash, pattern="^admin_confirm_split_cash_"),
             CallbackQueryHandler(callback_admin_reject_split, pattern="^admin_reject_split_"),
+            CallbackQueryHandler(callback_admin_approve_credit, pattern="^admin_approve_credit_"),
+            CallbackQueryHandler(callback_admin_reject_credit, pattern="^admin_reject_credit_"),
         ],
         states={
             ADMIN_ENTER_AMOUNT: [
