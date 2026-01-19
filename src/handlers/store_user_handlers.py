@@ -368,11 +368,34 @@ async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TY
     
     keyboard = [[InlineKeyboardButton("🏪 Continue Shopping", callback_data="store_start")]]
     
+    # Render user-facing order message via template engine, prefer template buttons if any
+    from src.utils.event_dispatcher import render_event
+    rendered, tpl_buttons = render_event('STORE_ORDER_PLACED', {'name': get_user(user_id).get('full_name') if get_user(user_id) else '', 'order_id': order['order_id'], 'amount': f"₹{order['total_amount']:.2f}"})
+    final_markup = None
+    if tpl_buttons:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard_rows = []
+        for row in tpl_buttons:
+            r = []
+            for b in row:
+                r.append(InlineKeyboardButton(b.get('text','Button'), callback_data=b.get('callback_data','')))
+            keyboard_rows.append(r)
+        final_markup = InlineKeyboardMarkup(keyboard_rows)
+    else:
+        final_markup = InlineKeyboardMarkup(keyboard)
+
     await query.edit_message_text(
-        order_text,
+        rendered or order_text,
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=final_markup
     )
+    # Schedule follow-ups for order placed (if configured)
+    try:
+        from src.utils.event_dispatcher import schedule_followups
+        if context and getattr(context, 'application', None):
+            schedule_followups(context.application, user_id, 'STORE_ORDER_PLACED', {'order_id': order['order_id'], 'name': get_user(user_id).get('full_name') if get_user(user_id) else '', 'amount': order['total_amount']})
+    except Exception:
+        logger.debug('Could not schedule follow-ups for STORE_ORDER_PLACED')
 
     # Notify admins for new orders so they can review and act (Full / Partial / Credit)
     try:

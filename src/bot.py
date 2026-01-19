@@ -54,7 +54,7 @@ from src.handlers.analytics_handlers import (
 )
 from src.handlers.admin_dashboard_handlers import (
     cmd_admin_panel, cmd_member_list, cmd_manage_users, cmd_export_excel,
-    callback_back_to_admin_panel, get_manage_users_conversation_handler
+    callback_back_to_admin_panel, get_manage_users_conversation_handler, get_template_conversation_handler, get_followup_conversation_handler
 )
 from src.handlers.payment_handlers import (
     cmd_challenges, callback_pay_fee,
@@ -406,6 +406,8 @@ def main():
     # NEW: Enhanced Admin Panel Handlers - MUST be BEFORE numeric handlers
     application.add_handler(CommandHandler('admin_panel', cmd_admin_panel))
     application.add_handler(get_manage_users_conversation_handler())
+    application.add_handler(get_template_conversation_handler())
+    application.add_handler(get_followup_conversation_handler())
     
     # Subscription handlers - MUST be BEFORE numeric handlers
     application.add_handler(get_subscription_conversation_handler())

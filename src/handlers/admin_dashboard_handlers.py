@@ -14,6 +14,8 @@ from src.database.user_operations import (
     get_all_users, get_user, delete_user, ban_user, unban_user, is_user_banned
 )
 from src.utils.auth import is_admin
+from src.utils.message_templates import get_template, save_template
+from src.utils import event_registry
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from datetime import datetime
@@ -47,6 +49,7 @@ async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("📥 Excel Export", callback_data="admin_export_excel")],
         [InlineKeyboardButton("💰 Revenue Stats", callback_data="dashboard_revenue"),
          InlineKeyboardButton("📈 Engagement", callback_data="dashboard_engagement")],
+        [InlineKeyboardButton("✏️ Message Templates", callback_data="admin_templates")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -55,6 +58,240 @@ async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Select an option below:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
+    )
+
+
+# --- Template management conversation ---
+SELECT_TEMPLATE, ENTER_TEMPLATE_TEXT = range(2)
+
+
+async def cmd_templates_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    await query.answer()
+
+    # List event keys with preview/edit buttons
+    keyboard = []
+    for k in sorted(event_registry.EVENT_KEYS):
+        keyboard.append([InlineKeyboardButton(f"Preview {k}", callback_data=f"template_preview:{k}"),
+                         InlineKeyboardButton(f"Edit {k}", callback_data=f"template_edit:{k}")])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        text="✏️ *Message Templates*\n\nSelect an event to preview or edit:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_followup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    await query.answer()
+
+    from src.utils.followup_manager import load_followups
+    followups = load_followups()
+    keyboard = []
+    for k in sorted(event_registry.EVENT_KEYS):
+        keyboard.append([InlineKeyboardButton(f"Edit follow-ups for {k}", callback_data=f"followup_edit:{k}"),
+                         InlineKeyboardButton(f"View {k}", callback_data=f"followup_view:{k}")])
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard_menu")])
+    await query.edit_message_text("🕒 *Follow-Up Rules*\n\nManage follow-up sequences per event:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def cmd_followup_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, key = query.data.split(':', 1)
+    from src.utils.followup_manager import get_followups
+    seq = get_followups(key)
+    if not seq:
+        await query.edit_message_text(f"No follow-ups defined for *{key}*.", parse_mode="Markdown")
+        return
+    text = f"*Follow-ups for {key}*:\n\n"
+    for i, step in enumerate(seq):
+        text += f"{i+1}. Delay: {step.get('delay_hours')}h → Template: {step.get('template')}\n"
+    await query.edit_message_text(text, parse_mode="Markdown")
+
+
+async def cmd_followup_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, key = query.data.split(':', 1)
+    context.user_data['editing_followup_event'] = key
+    # initialize buffer for line-by-line entry
+    context.user_data['followup_buffer'] = []
+    await query.edit_message_text(
+        f"Editing follow-ups for *{key}*\n\nEnter steps one-per-line in the format:\n`<delay_hours> <TEMPLATE_KEY>`\nExample: `24 PAYMENT_REMINDER_1`\nSend each step on a new line.\nWhen finished send `DONE`. Send /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    return ENTER_TEMPLATE_TEXT
+
+
+async def handle_new_followup_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    key = context.user_data.get('editing_followup_event')
+    if not key:
+        await update.message.reply_text("No event selected. Use the Follow-Up Rules menu.")
+        return SELECT_TEMPLATE
+
+    text = (update.message.text or '').strip()
+    # cancel handling
+    if text.lower() == '/cancel':
+        context.user_data.pop('editing_followup_event', None)
+        context.user_data.pop('followup_buffer', None)
+        await update.message.reply_text("Cancelled follow-up edit.")
+        return SELECT_TEMPLATE
+
+    # finish and save
+    if text.upper() == 'DONE':
+        buf = context.user_data.get('followup_buffer', [])
+        try:
+            seq = []
+            for line in buf:
+                if not line.strip():
+                    continue
+                # allow comma or space separated: "24, PAYMENT_REMINDER_1" or "24 PAYMENT_REMINDER_1"
+                parts = [p.strip() for p in line.replace(',', ' ').split() if p.strip()]
+                if len(parts) < 2:
+                    raise ValueError(f"Invalid step line: '{line}'")
+                delay_hours = int(parts[0])
+                template = parts[1]
+                seq.append({'delay_hours': delay_hours, 'template': template})
+
+            from src.utils.followup_manager import save_followups
+            save_followups(admin_id, key, seq)
+            await update.message.reply_text(f"✅ Follow-up sequence for {key} saved ({len(seq)} steps).")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error saving follow-ups: {e}")
+        finally:
+            context.user_data.pop('editing_followup_event', None)
+            context.user_data.pop('followup_buffer', None)
+        return SELECT_TEMPLATE
+
+    # otherwise treat line as a step and append to buffer
+    buf = context.user_data.setdefault('followup_buffer', [])
+    buf.append(text)
+    await update.message.reply_text("Added step: {}\nSend more steps or 'DONE' to finish. Send /cancel to abort.".format(text))
+    return ENTER_TEMPLATE_TEXT
+
+
+async def cmd_audit_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+    await query.answer()
+    from src.utils.message_templates import tail_audit
+    rows = tail_audit(limit=25)
+    if not rows:
+        await query.edit_message_text("No audit entries found.")
+        return
+    text = "*Audit (latest edits)*\n\n"
+    for r in rows[-10:]:
+        ts = r.get('timestamp')
+        admin = r.get('admin_id')
+        ek = r.get('event_key')
+        text += f"{ts} — Admin {admin} — {ek}\n"
+    await query.edit_message_text(text, parse_mode="Markdown")
+
+
+async def cmd_admin_toggle_editing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    from src.config import SUPER_ADMIN_USER_ID
+    # only super admin may toggle
+    if str(query.from_user.id) != str(SUPER_ADMIN_USER_ID):
+        await query.answer("Only super-admin can toggle this.", show_alert=True)
+        return
+    from src.utils.followup_manager import is_admin_editing_enabled, set_admin_editing_enabled
+    enabled = is_admin_editing_enabled()
+    set_admin_editing_enabled(not enabled)
+    await query.answer()
+    await query.edit_message_text(f"Admin editing enabled: {not enabled}")
+
+
+async def cmd_template_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, key = query.data.split(':', 1)
+    tpl = get_template(key)
+    text = tpl.get('text') if tpl else event_registry.DEFAULT_TEMPLATES.get(key, '')
+    enabled = tpl.get('enabled', True) if tpl else True
+    await query.edit_message_text(f"*{key}* (enabled={enabled})\n\n{text}", parse_mode="Markdown")
+
+
+async def cmd_template_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, key = query.data.split(':', 1)
+    context.user_data['editing_event'] = key
+    tpl = get_template(key)
+    text = tpl.get('text') if tpl else event_registry.DEFAULT_TEMPLATES.get(key, '')
+    await query.edit_message_text(
+        f"Editing *{key}*\n\nCurrent template:\n\n{text}\n\nSend the new template text using placeholders like {{name}}, or /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    return ENTER_TEMPLATE_TEXT
+
+
+async def handle_new_template_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    key = context.user_data.get('editing_event')
+    if not key:
+        await update.message.reply_text("No event selected. Use the Templates menu.")
+        return SELECT_TEMPLATE
+    new_text = update.message.text
+    try:
+        save_template(admin_id, key, new_text=new_text)
+        await update.message.reply_text(f"✅ Template for {key} saved.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error saving template: {e}")
+    finally:
+        context.user_data.pop('editing_event', None)
+    return SELECT_TEMPLATE
+
+
+def get_template_conversation_handler():
+    from telegram.ext import ConversationHandler, MessageHandler, filters, CallbackQueryHandler
+
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cmd_templates_menu, pattern="^admin_templates$")],
+        states={
+            SELECT_TEMPLATE: [
+                CallbackQueryHandler(cmd_template_preview, pattern=r"^template_preview:"),
+                CallbackQueryHandler(cmd_template_edit_start, pattern=r"^template_edit:"),
+            ],
+            ENTER_TEMPLATE_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_template_text)
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$")],
+        per_message=False
+    )
+
+
+def get_followup_conversation_handler():
+    from telegram.ext import ConversationHandler, MessageHandler, filters, CallbackQueryHandler
+
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cmd_followup_menu, pattern="^admin_followups$")],
+        states={
+            SELECT_TEMPLATE: [
+                CallbackQueryHandler(cmd_followup_view, pattern=r"^followup_view:"),
+                CallbackQueryHandler(cmd_followup_edit_start, pattern=r"^followup_edit:"),
+            ],
+            ENTER_TEMPLATE_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_followup_text)
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$")],
+        per_message=False
     )
 
 
@@ -508,6 +745,10 @@ async def callback_back_to_admin_panel(update: Update, context: ContextTypes.DEF
          InlineKeyboardButton("📥 Excel Export", callback_data="admin_export_excel")],
         [InlineKeyboardButton("💰 Revenue Stats", callback_data="dashboard_revenue"),
          InlineKeyboardButton("📈 Engagement", callback_data="dashboard_engagement")],
+        [InlineKeyboardButton("✏️ Message Templates", callback_data="admin_templates")],
+        [InlineKeyboardButton("🕒 Follow-Up Rules", callback_data="admin_followups")],
+        [InlineKeyboardButton("🔒 Toggle Admin Editing", callback_data="admin_toggle_editing")],
+        [InlineKeyboardButton("📜 View Audit Log", callback_data="admin_view_audit")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     

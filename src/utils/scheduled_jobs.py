@@ -327,12 +327,35 @@ async def send_shake_credit_reminders(context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("✅ Mark as Paid", callback_data=f"user_paid_shake_{shake_id}")],
                 ]
                 
+                # Render template and prefer template buttons; fall back to existing keyboard
+                from src.utils.event_dispatcher import render_event
+                rendered, tpl_buttons = render_event('PAYMENT_REMINDER_1', {'name': user.get('full_name'), 'amount': f"₹{order.get('amount')}", 'due_date': None})
+                final_markup = InlineKeyboardMarkup(keyboard)
+                if tpl_buttons:
+                    try:
+                        km = []
+                        for row in tpl_buttons:
+                            r = []
+                            for b in row:
+                                r.append(InlineKeyboardButton(b.get('text','Button'), callback_data=b.get('callback_data','')))
+                            km.append(r)
+                        final_markup = InlineKeyboardMarkup(km)
+                    except Exception:
+                        pass
+
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=reminder_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    text=rendered or reminder_text,
+                    reply_markup=final_markup,
                     parse_mode="Markdown"
                 )
+                # Schedule follow-ups for payment reminders
+                try:
+                    from src.utils.event_dispatcher import schedule_followups
+                    if context and getattr(context, 'application', None):
+                        schedule_followups(context.application, user_id, 'PAYMENT_REMINDER_1', {'name': user.get('full_name'), 'amount': order.get('amount')})
+                except Exception:
+                    logger.debug('Could not schedule follow-ups for PAYMENT_REMINDER_1')
                 
                 # Update reminder count with guard to avoid over-incrementing
                 from src.database.connection import execute_query

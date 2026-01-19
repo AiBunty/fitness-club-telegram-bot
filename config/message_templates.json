@@ -1,0 +1,77 @@
+{
+  "SUBSCRIPTION_CREDIT": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "ATTENDANCE_DENIED_GEOFENCE": {
+    "enabled": true,
+    "text": "Hi {{name}}, you're outside the allowed location for check-in.",
+    "buttons": []
+  },
+  "SUBSCRIPTION_PAID": {
+    "enabled": true,
+    "text": "Thanks {{name}} — payment received: {{amount}}.",
+    "buttons": []
+  },
+  "SUBSCRIPTION_PARTIAL": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "STORE_ORDER_PLACED": {
+    "enabled": true,
+    "text": "Order {{order_id}} placed. Total: {{amount}}.",
+    "buttons": []
+  },
+  "STORE_ORDER_PARTIAL": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "ATTENDANCE_SUCCESS": {
+    "enabled": true,
+    "text": "Hi {{name}}, your attendance for {{class_name}} at {{time}} is confirmed.",
+    "buttons": []
+  },
+  "ATTENDANCE_DENIED_UNPAID": {
+    "enabled": true,
+    "text": "Hi {{name}}, attendance denied — outstanding due: {{due_amount}}.",
+    "buttons": []
+  },
+  "PAYMENT_REMINDER_2": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "STORE_ORDER_CREDIT": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "STORE_ORDER_COMPLETED": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "ADMIN_OVERRIDE_APPLIED": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "PAYMENT_FINAL_NOTICE": {
+    "enabled": true,
+    "text": "",
+    "buttons": []
+  },
+  "USER_WELCOME": {
+    "enabled": true,
+    "text": "🏋️ *Welcome to Wani's Level Up Club!* 💪\n\nHey there, Champion! 👋\n\nLet's get started! Tap below to register and begin your Level Up journey today.",
+    "buttons": []
+  },
+  "PAYMENT_REMINDER_1": {
+    "enabled": true,
+    "text": "Hi {{name}}, friendly reminder: you owe {{amount}} due by {{due_date}}.",
+    "buttons": []
+  }
+}

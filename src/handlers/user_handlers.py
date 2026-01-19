@@ -142,7 +142,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 Register Now", callback_data="register")]
     ])
-    await msg.reply_text(welcome_text, reply_markup=buttons, parse_mode='Markdown')
+    # Render via template engine to allow admin customization while preserving behavior
+    from src.utils.event_dispatcher import render_event
+    rendered_text, tpl_buttons = render_event('USER_WELCOME', {'name': update.effective_user.first_name})
+    # prefer template buttons if present, else use existing
+    final_markup = None
+    if tpl_buttons:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = []
+        for row in tpl_buttons:
+            r = []
+            for b in row:
+                r.append(InlineKeyboardButton(b.get('text','Button'), callback_data=b.get('callback_data','')))
+            keyboard.append(r)
+        final_markup = InlineKeyboardMarkup(keyboard)
+    else:
+        final_markup = buttons
+
+    await msg.reply_text(rendered_text or welcome_text, reply_markup=final_markup, parse_mode='Markdown')
+    # Schedule follow-ups if configured
+    try:
+        from src.utils.event_dispatcher import schedule_followups
+        if context and getattr(context, 'application', None):
+            schedule_followups(context.application, update.effective_user.id, 'USER_WELCOME', {'name': update.effective_user.first_name})
+    except Exception:
+        logger.debug('Could not schedule follow-ups for USER_WELCOME')
+
     return ConversationHandler.END
 
 

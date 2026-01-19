@@ -1,0 +1,12 @@
+{
+  "TEST_EVENT": [
+    {
+      "delay_hours": 0.001,
+      "template": "PAYMENT_REMINDER_1"
+    },
+    {
+      "delay_hours": 0.002,
+      "template": "PAYMENT_REMINDER_2"
+    }
+  ]
+}

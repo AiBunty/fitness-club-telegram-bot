@@ -25,17 +25,17 @@ def test_store_order_payment_and_credit_rollback():
         uid = cur.fetchone()[0]
 
         # Insert minimal store_order row (use store_orders schema)
-        cur.execute("INSERT INTO store_orders (user_id, total_amount, payment_method, order_status, created_at) VALUES (%s, %s, %s, %s, NOW()) RETURNING order_id",
-                (uid, 100.00, 'ONLINE', 'PENDING'))
+        cur.execute("INSERT INTO store_orders (user_id, total_amount, payment_method, payment_status, created_at) VALUES (%s, %s, %s, %s, NOW()) RETURNING order_id",
+            (uid, 100.00, 'ONLINE', 'PENDING'))
         order_id = cur.fetchone()[0]
 
         # Mark as paid
-        cur.execute("UPDATE store_orders SET order_status='PAID' WHERE order_id=%s RETURNING order_status", (order_id,))
+        cur.execute("UPDATE store_orders SET payment_status='PAID' WHERE order_id=%s RETURNING payment_status", (order_id,))
         paid = cur.fetchone()
         assert paid[0] == 'PAID'
 
         # Reset to credit and test credit flow
-        cur.execute("UPDATE store_orders SET order_status='CREDIT' WHERE order_id=%s RETURNING order_status", (order_id,))
+        cur.execute("UPDATE store_orders SET payment_status='CREDIT' WHERE order_id=%s RETURNING payment_status", (order_id,))
         credit = cur.fetchone()
         assert credit[0] == 'CREDIT'
 

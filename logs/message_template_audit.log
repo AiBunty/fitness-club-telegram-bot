@@ -1,0 +1,1 @@
+{"timestamp": "2026-01-19T14:10:00.538894Z", "admin_id": 1, "event_key": "TEST_EVENT", "old_followups": [], "new_followups": [{"delay_hours": 0.001, "template": "PAYMENT_REMINDER_1"}, {"delay_hours": 0.002, "template": "PAYMENT_REMINDER_2"}]}
