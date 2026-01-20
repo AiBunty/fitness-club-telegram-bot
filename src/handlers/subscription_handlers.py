@@ -22,7 +22,7 @@ from src.utils.auth import is_admin
 logger = logging.getLogger(__name__)
 
 # Conversation states
-SELECT_PLAN, CONFIRM_PLAN, SELECT_PAYMENT, ENTER_UPI_VERIFICATION, ADMIN_APPROVE_SUB, ADMIN_ENTER_AMOUNT, ADMIN_SELECT_DATE, ENTER_SPLIT_UPI_AMOUNT, ENTER_SPLIT_CONFIRM = range(9)
+SELECT_PLAN, CONFIRM_PLAN, SELECT_PAYMENT, ENTER_UPI_VERIFICATION, ADMIN_APPROVE_SUB, ADMIN_ENTER_AMOUNT, ADMIN_SELECT_DATE, ENTER_SPLIT_UPI_AMOUNT, ENTER_SPLIT_CONFIRM, ADMIN_ENTER_BILL, ADMIN_ENTER_UPI_RECEIVED, ADMIN_ENTER_CASH_RECEIVED, ADMIN_FINAL_CONFIRM = range(13)
 
 
 async def cmd_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1199,7 +1199,7 @@ async def callback_admin_approve_cash(update: Update, context: ContextTypes.DEFA
 
 
 async def callback_admin_approve_split_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: Approve UPI portion of split payment"""
+    """Admin: Start split payment UPI approval - ask for FINAL BILL amount"""
     query = update.callback_query
     
     if not is_admin(query.from_user.id):
@@ -1214,10 +1214,7 @@ async def callback_admin_approve_split_upi(update: Update, context: ContextTypes
         logger.warning(f"Split UPI approve: query.answer failed: {answer_err}")
     
     try:
-        from src.database.subscription_operations import (
-            get_subscription_request_details, approve_subscription,
-            get_receivable_by_source
-        )
+        from src.database.subscription_operations import get_subscription_request_details
         
         # Get request details
         request_details = get_subscription_request_details(request_id)
@@ -1225,59 +1222,36 @@ async def callback_admin_approve_split_upi(update: Update, context: ContextTypes
             await query.edit_message_text("❌ Request not found")
             return
         
-        user_id = request_details['user_id']
-        plan_id = request_details['plan_id']
+        # Store in context for the approval flow
+        context.user_data['approving_request_id'] = request_id
+        context.user_data['approving_request_details'] = request_details
+        context.user_data['payment_method'] = 'split'
+        context.user_data['approval_step'] = 'enter_bill'
         
-        # Get receivable to check split amounts
-        receivable = get_receivable_by_source('subscription', request_id)
-        if not receivable:
-            await query.edit_message_text("❌ Payment record not found")
-            return
+        plan = SUBSCRIPTION_PLANS.get(request_details['plan_id'], {})
         
-        # Get split breakdown
-        from src.database.ar_operations import get_receivable_breakdown
-        breakdown = get_receivable_breakdown(receivable.get('receivable_id'))
+        # STEP 1: Ask admin to enter FINAL BILL AMOUNT
+        text = (
+            f"*💰 STEP 1: Enter Final Bill Amount*\n\n"
+            f"User: {request_details.get('user_name', 'Unknown')}\n"
+            f"Plan: {plan.get('name', 'Unknown')}\n"
+            f"Expected: Rs. {request_details['amount']:,}\n\n"
+            f"⚠️ *Enter the FINAL BILL amount* (must be > 0)\n\n"
+            f"This will be the SINGLE SOURCE OF TRUTH for accounting.\n\n"
+            f"Example: 2500"
+        )
         
-        upi_amount = breakdown.get('methods', {}).get('upi', 0)
-        cash_amount = breakdown.get('methods', {}).get('cash', 0)
-        total_amount = upi_amount + cash_amount
+        await query.edit_message_text(text, parse_mode="Markdown")
+        logger.info(f"Admin {query.from_user.id} starting split UPI approval for request {request_id} - asking for bill amount")
+        return ADMIN_ENTER_BILL
         
-        # Auto-approve subscription with the total amount (both UPI and pending cash)
-        plan = SUBSCRIPTION_PLANS.get(plan_id, {})
-        end_date = datetime.now() + timedelta(days=plan.get('duration_days', 30))
-        
-        success = approve_subscription(request_id, total_amount, end_date)
-        
-        if success:
-            # Notify user
-            user = get_user(user_id)
-            if user and user.get('user_id'):
-                try:
-                    message = (
-                        f"✅ *Split Payment - UPI Approved*\n\n"
-                        f"Plan: {plan.get('name', 'Unknown')}\n"
-                        f"*Total: Rs. {total_amount:,.0f}*\n\n"
-                        f"*Payment Status:*\n"
-                        f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅ Confirmed\n"
-                        f"• 💵 Cash: Rs. {cash_amount:,.0f} (Admin will confirm)\n\n"
-                        f"Your subscription is now active!\n"
-                        f"Admin is collecting the cash portion. 🎉"
-                    )
-                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
-                    logger.info(f"✅ Split UPI approval notification sent to user {user_id}")
-                except Exception as e:
-                    logger.debug(f"Could not send approval notification to user: {e}")
-            
-            # Schedule payment reminders for outstanding cash balance
-            try:
-                from src.utils.event_dispatcher import schedule_followups
-                
-                if cash_amount > 0 and context and getattr(context, 'application', None):
-                    schedule_followups(
-                        context.application, user_id, 'PAYMENT_REMINDER_1',
-                        {'name': request_details.get('user_name', ''), 'amount': cash_amount}
-                    )
-                    logger.info(f"Payment reminder scheduled for split payment cash balance: User {user_id}, Amount {cash_amount}")
+    except Exception as e:
+        logger.error(f"Error in callback_admin_approve_split_upi: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("❌ Error starting approval process")
+        except:
+            pass
+
             except Exception as e:
                 logger.debug(f"Could not schedule payment reminders for split payment: {e}")
             
@@ -1653,6 +1627,32 @@ async def callback_admin_reject_cash(update: Update, context: ContextTypes.DEFAU
                 pass
 
 
+async def callback_admin_cancel_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Cancel the approval process"""
+    query = update.callback_query
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
+    
+    await query.answer()
+    
+    try:
+        request_id = context.user_data.get('approving_request_id')
+        await query.edit_message_text(
+            "❌ *Approval Cancelled*\n\n"
+            f"Request ID: {request_id}\n\n"
+            "You can approve it later from the admin dashboard.",
+            parse_mode="Markdown"
+        )
+        logger.info(f"Admin {query.from_user.id} cancelled approval for request {request_id}")
+    except Exception as e:
+        logger.error(f"Error in callback_admin_cancel_approval: {e}")
+        await query.edit_message_text("❌ Approval cancelled")
+    
+    return ConversationHandler.END
+
+
 async def handle_approval_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle amount input and show calendar for custom end date selection"""
     try:
@@ -1685,7 +1685,358 @@ async def handle_approval_amount(update: Update, context: ContextTypes.DEFAULT_T
         return ADMIN_ENTER_AMOUNT
 
 
+async def handle_admin_enter_bill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin entering FINAL BILL amount (STEP 1)"""
+    try:
+        bill_amount = float(update.message.text.strip().replace(',', ''))
+        
+        if bill_amount <= 0:
+            await update.message.reply_text("❌ Bill amount must be greater than 0. Please try again:")
+            return ADMIN_ENTER_BILL
+        
+        # Store bill amount
+        context.user_data['final_bill_amount'] = bill_amount
+        
+        request_details = context.user_data.get('approving_request_details')
+        payment_method = context.user_data.get('payment_method')
+        
+        # STEP 2: Ask for payment received based on method
+        if payment_method == 'split':
+            # For split: ask for UPI received first
+            context.user_data['approval_step'] = 'enter_upi_received'
+            text = (
+                f"*📱 STEP 2A: Enter UPI Amount Received*\n\n"
+                f"Final Bill: Rs. {bill_amount:,.2f}\n\n"
+                f"How much did you receive via UPI?\n"
+                f"(Must be >= 0 and <= {bill_amount:,.2f})\n\n"
+                f"Example: 1000"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+            return ADMIN_ENTER_UPI_RECEIVED
+        elif payment_method == 'upi':
+            context.user_data['approval_step'] = 'enter_upi_received'
+            text = (
+                f"*📱 STEP 2: Enter UPI Amount Received*\n\n"
+                f"Final Bill: Rs. {bill_amount:,.2f}\n\n"
+                f"How much did you receive via UPI?\n"
+                f"(Must be >= 0 and <= {bill_amount:,.2f})\n\n"
+                f"Example: {bill_amount:,.0f}"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+            return ADMIN_ENTER_UPI_RECEIVED
+        elif payment_method == 'cash':
+            context.user_data['approval_step'] = 'enter_cash_received'
+            text = (
+                f"*💵 STEP 2: Enter Cash Amount Received*\n\n"
+                f"Final Bill: Rs. {bill_amount:,.2f}\n\n"
+                f"How much did you receive via Cash?\n"
+                f"(Must be >= 0 and <= {bill_amount:,.2f})\n\n"
+                f"Example: {bill_amount:,.0f}"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+            return ADMIN_ENTER_CASH_RECEIVED
+        elif payment_method == 'credit':
+            # Pay later: received = 0
+            context.user_data['upi_received'] = 0
+            context.user_data['cash_received'] = 0
+            # Move to calendar
+            return await show_calendar_or_confirm(update, context)
+            
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Please enter a valid number:\n\nExample: 2500")
+        return ADMIN_ENTER_BILL
+
+
+async def handle_admin_enter_upi_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin entering UPI amount received (STEP 2A for split, STEP 2 for UPI)"""
+    try:
+        upi_received = float(update.message.text.strip().replace(',', ''))
+        final_bill = context.user_data.get('final_bill_amount', 0)
+        
+        if upi_received < 0 or upi_received > final_bill:
+            await update.message.reply_text(
+                f"❌ UPI amount must be between 0 and {final_bill:,.2f}. Please try again:"
+            )
+            return ADMIN_ENTER_UPI_RECEIVED
+        
+        # Store UPI received
+        context.user_data['upi_received'] = upi_received
+        
+        payment_method = context.user_data.get('payment_method')
+        
+        if payment_method == 'split':
+            # For split: now ask for CASH received
+            context.user_data['approval_step'] = 'enter_cash_received'
+            remaining = final_bill - upi_received
+            text = (
+                f"*💵 STEP 2B: Enter Cash Amount Received*\n\n"
+                f"Final Bill: Rs. {final_bill:,.2f}\n"
+                f"UPI Received: Rs. {upi_received:,.2f}\n"
+                f"Remaining: Rs. {remaining:,.2f}\n\n"
+                f"How much did you receive via Cash?\n"
+                f"(Must be >= 0 and <= {remaining:,.2f})\n\n"
+                f"Example: {remaining:,.0f}"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+            return ADMIN_ENTER_CASH_RECEIVED
+        else:
+            # UPI only: set cash to 0 and move to calendar/confirm
+            context.user_data['cash_received'] = 0
+            return await show_calendar_or_confirm(update, context)
+            
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Please enter a valid number:\n\nExample: 1000")
+        return ADMIN_ENTER_UPI_RECEIVED
+
+
+async def handle_admin_enter_cash_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin entering CASH amount received (STEP 2B for split, STEP 2 for cash)"""
+    try:
+        cash_received = float(update.message.text.strip().replace(',', ''))
+        final_bill = context.user_data.get('final_bill_amount', 0)
+        upi_received = context.user_data.get('upi_received', 0)
+        total_received = upi_received + cash_received
+        
+        if cash_received < 0 or total_received > final_bill:
+            await update.message.reply_text(
+                f"❌ Cash amount invalid. Total received cannot exceed {final_bill:,.2f}.\n"
+                f"UPI already received: {upi_received:,.2f}\n"
+                f"Maximum cash: {final_bill - upi_received:,.2f}\n\n"
+                f"Please try again:"
+            )
+            return ADMIN_ENTER_CASH_RECEIVED
+        
+        # Store cash received
+        context.user_data['cash_received'] = cash_received
+        
+        # Move to calendar (for subscription) or final confirm
+        return await show_calendar_or_confirm(update, context)
+            
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount. Please enter a valid number:\n\nExample: 1500")
+        return ADMIN_ENTER_CASH_RECEIVED
+
+
+async def show_calendar_or_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show calendar for subscription end date (STEP 3) or skip to confirm"""
+    request_details = context.user_data.get('approving_request_details')
+    plan_id = request_details.get('plan_id')
+    
+    # Check if this is a subscription (has plan_id)
+    if plan_id:
+        # STEP 3: Show calendar
+        plan = SUBSCRIPTION_PLANS.get(plan_id, {})
+        duration_days = plan.get('duration_days', 30)
+        
+        # Generate calendar
+        from src.utils.calendar_picker import generate_calendar
+        calendar_markup = generate_calendar()
+        
+        final_bill = context.user_data.get('final_bill_amount', 0)
+        upi_received = context.user_data.get('upi_received', 0)
+        cash_received = context.user_data.get('cash_received', 0)
+        balance = final_bill - upi_received - cash_received
+        
+        text = (
+            f"*📅 STEP 3: Select Subscription End Date*\n\n"
+            f"Plan: {plan.get('name', 'Unknown')} ({duration_days} days)\n"
+            f"User: {request_details.get('user_name', 'Unknown')}\n\n"
+            f"*Payment Summary:*\n"
+            f"Final Bill: Rs. {final_bill:,.2f}\n"
+            f"UPI Received: Rs. {upi_received:,.2f}\n"
+            f"Cash Received: Rs. {cash_received:,.2f}\n"
+            f"Balance: Rs. {balance:,.2f}\n\n"
+            f"Please select the subscription end date:"
+        )
+        
+        await update.message.reply_text(
+            text,
+            reply_markup=calendar_markup,
+            parse_mode="Markdown"
+        )
+        return ADMIN_SELECT_DATE
+    else:
+        # Not a subscription: show final confirm
+        return await show_final_confirmation(update, context)
+
+
+async def show_final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show final confirmation screen (STEP 4)"""
+    request_details = context.user_data.get('approving_request_details')
+    final_bill = context.user_data.get('final_bill_amount', 0)
+    upi_received = context.user_data.get('upi_received', 0)
+    cash_received = context.user_data.get('cash_received', 0)
+    balance = final_bill - upi_received - cash_received
+    end_date = context.user_data.get('selected_end_date')
+    request_id = context.user_data.get('approving_request_id')
+    
+    text = (
+        f"*✅ STEP 4: Final Confirmation*\n\n"
+        f"User: {request_details.get('user_name', 'Unknown')}\n\n"
+        f"*Payment Summary:*\n"
+        f"💰 Total Bill: Rs. {final_bill:,.2f}\n"
+    )
+    
+    if upi_received > 0:
+        text += f"📱 UPI: Rs. {upi_received:,.2f}\n"
+    if cash_received > 0:
+        text += f"💵 Cash: Rs. {cash_received:,.2f}\n"
+    
+    text += f"💳 Balance: Rs. {balance:,.2f}\n\n"
+    
+    if end_date:
+        text += f"📅 End Date: {end_date.strftime('%d %b %Y')}\n\n"
+    
+    if balance == 0:
+        text += "✅ *FULL PAYMENT - Subscription will activate*"
+    elif upi_received + cash_received > 0:
+        text += f"⚠️ *PARTIAL PAYMENT - Balance: Rs. {balance:,.2f}*\n"
+        text += "Reminders will be sent after 48 hours."
+    else:
+        text += "⚠️ *PAY LATER - Full amount outstanding*\n"
+        text += "Reminders will be sent after 48 hours."
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ CONFIRM", callback_data=f"admin_final_confirm_{request_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"admin_cancel_approval_{request_id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    return ADMIN_FINAL_CONFIRM
+
+
+async def callback_admin_final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle final admin confirmation and complete approval"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
+    
+    try:
+        request_id = context.user_data.get('approving_request_id')
+        request_details = context.user_data.get('approving_request_details')
+        final_bill = context.user_data.get('final_bill_amount', 0)
+        upi_received = context.user_data.get('upi_received', 0)
+        cash_received = context.user_data.get('cash_received', 0)
+        balance = final_bill - upi_received - cash_received
+        end_date = context.user_data.get('selected_end_date')
+        
+        # Approve subscription with final bill amount
+        from src.database.subscription_operations import approve_subscription
+        success = approve_subscription(request_id, final_bill, end_date)
+        
+        if success:
+            # Update AR ledger with actual amounts
+            from src.database.ar_operations import record_payment
+            user_id = request_details['user_id']
+            
+            if upi_received > 0:
+                record_payment(user_id, 'subscription', request_id, upi_received, 'upi')
+            if cash_received > 0:
+                record_payment(user_id, 'subscription', request_id, cash_received, 'cash')
+            
+            # Schedule reminders if balance > 0 (48 hours from now)
+            if balance > 0:
+                from src.utils.event_dispatcher import schedule_followups
+                from datetime import datetime, timedelta
+                
+                # Schedule first reminder 48 hours from now
+                reminder_time = datetime.now() + timedelta(hours=48)
+                if context and getattr(context, 'application', None):
+                    schedule_followups(
+                        context.application, user_id, 'PAYMENT_REMINDER_1',
+                        {
+                            'name': request_details.get('user_name', ''),
+                            'amount': balance,
+                            'delay_hours': 48
+                        }
+                    )
+                    logger.info(f"Payment reminder scheduled (48hr delay) for user {user_id}, balance {balance}")
+            
+            # Notify user
+            from src.database.user_operations import get_user
+            user = get_user(user_id)
+            if user and user.get('user_id'):
+                plan = SUBSCRIPTION_PLANS.get(request_details.get('plan_id'), {})
+                message = (
+                    f"✅ *Subscription Approved!*\n\n"
+                    f"Plan: {plan.get('name', 'Unknown')}\n"
+                    f"Amount: Rs. {final_bill:,.2f}\n"
+                )
+                if upi_received > 0:
+                    message += f"UPI: Rs. {upi_received:,.2f} ✅\n"
+                if cash_received > 0:
+                    message += f"Cash: Rs. {cash_received:,.2f} ✅\n"
+                if balance > 0:
+                    message += f"\n⚠️ Balance: Rs. {balance:,.2f}\n"
+                    message += "Reminder will be sent in 48 hours."
+                if end_date:
+                    message += f"\n📅 Valid until: {end_date.strftime('%d %b %Y')}"
+                
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                except Exception as e:
+                    logger.debug(f"Could not send approval notification: {e}")
+            
+            await query.edit_message_text(
+                f"✅ *Approval Complete!*\n\n"
+                f"User: {request_details.get('user_name', 'Unknown')}\n"
+                f"Amount: Rs. {final_bill:,.2f}\n"
+                f"Balance: Rs. {balance:,.2f}",
+                parse_mode="Markdown"
+            )
+            
+            logger.info(f"Admin {query.from_user.id} approved request {request_id} - Bill:{final_bill}, Balance:{balance}")
+            return ConversationHandler.END
+        else:
+            await query.edit_message_text("❌ Failed to approve. Please try again.")
+            return ConversationHandler.END
+            
+    except Exception as e:
+        logger.error(f"Error in callback_admin_final_confirm: {e}", exc_info=True)
+        await query.edit_message_text("❌ Error completing approval")
+        return ConversationHandler.END
+
+
 async def callback_approve_with_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Complete approval after date selection - store date and show final confirm"""
+    query = update.callback_query
+    logger.info(f"[APPROVE_DATE] callback_approve_with_date triggered by admin {query.from_user.id}, callback_data={query.data}")
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
+    
+    await query.answer()
+    
+    try:
+        # Extract date from callback data
+        date_str = query.data.split("_")[-1]
+        end_date = datetime.strptime(date_str, "%Y%m%d")
+        logger.info(f"[APPROVE_DATE] Extracted end_date: {end_date}")
+        
+        # Store end date in context
+        context.user_data['selected_end_date'] = end_date
+        
+        # Show final confirmation screen
+        # Convert query update to message-like update for show_final_confirmation
+        from types import SimpleNamespace
+        fake_update = SimpleNamespace(message=query.message)
+        return await show_final_confirmation(fake_update, context)
+        
+    except Exception as e:
+        logger.error(f"Error in callback_approve_with_date: {e}", exc_info=True)
+        await query.edit_message_text("❌ Error processing date selection")
+        return ConversationHandler.END
+
+
+# Keep old callback_approve_with_date logic as fallback
+async def callback_approve_with_date_old(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Complete approval after date selection"""
     query = update.callback_query
     logger.info(f"[APPROVE_DATE] callback_approve_with_date triggered by admin {query.from_user.id}, callback_data={query.data}")
@@ -2632,9 +2983,22 @@ def get_admin_approval_conversation_handler():
             ADMIN_ENTER_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_approval_amount),
             ],
+            ADMIN_ENTER_BILL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_enter_bill),
+            ],
+            ADMIN_ENTER_UPI_RECEIVED: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_enter_upi_received),
+            ],
+            ADMIN_ENTER_CASH_RECEIVED: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_enter_cash_received),
+            ],
             ADMIN_SELECT_DATE: [
                 CallbackQueryHandler(callback_approve_with_date, pattern="^approve_date_"),
                 CallbackQueryHandler(callback_calendar_nav, pattern="^cal_(prev|next)_"),
+            ],
+            ADMIN_FINAL_CONFIRM: [
+                CallbackQueryHandler(callback_admin_final_confirm, pattern="^admin_final_confirm_"),
+                CallbackQueryHandler(callback_admin_cancel_approval, pattern="^admin_cancel_approval_"),
             ],
         },
         fallbacks=[],
