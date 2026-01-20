@@ -1208,29 +1208,33 @@ async def callback_admin_approve_split_upi(update: Update, context: ContextTypes
     
     request_id = int(query.data.split("_")[-1])
     
+    # Simplified, robust implementation: ask admin for final bill amount and move to ADMIN_ENTER_BILL
     try:
         await query.answer()
-    except Exception as answer_err:
-        logger.warning(f"Split UPI approve: query.answer failed: {answer_err}")
-    
+    except Exception:
+        logger.debug("callback_admin_approve_split_upi: query.answer failed")
+
     try:
         from src.database.subscription_operations import get_subscription_request_details
-        
-        # Get request details
+
         request_details = get_subscription_request_details(request_id)
         if not request_details:
-            await query.edit_message_text("❌ Request not found")
-            return
-        
-        # Store in context for the approval flow
+            try:
+                await query.edit_message_text("❌ Request not found")
+            except Exception:
+                try:
+                    await query.edit_message_caption("❌ Request not found")
+                except Exception:
+                    pass
+            return ConversationHandler.END
+
         context.user_data['approving_request_id'] = request_id
         context.user_data['approving_request_details'] = request_details
         context.user_data['payment_method'] = 'split'
         context.user_data['approval_step'] = 'enter_bill'
-        
+
         plan = SUBSCRIPTION_PLANS.get(request_details['plan_id'], {})
-        
-        # STEP 1: Ask admin to enter FINAL BILL AMOUNT
+
         text = (
             f"*💰 STEP 1: Enter Final Bill Amount*\n\n"
             f"User: {request_details.get('user_name', 'Unknown')}\n"
@@ -1240,42 +1244,17 @@ async def callback_admin_approve_split_upi(update: Update, context: ContextTypes
             f"This will be the SINGLE SOURCE OF TRUTH for accounting.\n\n"
             f"Example: 2500"
         )
-        
+
         await query.edit_message_text(text, parse_mode="Markdown")
         logger.info(f"Admin {query.from_user.id} starting split UPI approval for request {request_id} - asking for bill amount")
         return ADMIN_ENTER_BILL
-        
     except Exception as e:
         logger.error(f"Error in callback_admin_approve_split_upi: {e}", exc_info=True)
         try:
             await query.edit_message_text("❌ Error starting approval process")
-        except:
+        except Exception:
             pass
-
-            except Exception as e:
-                logger.debug(f"Could not schedule payment reminders for split payment: {e}")
-            
-            await query.edit_message_text(
-                f"✅ *Split Payment - UPI Approved*\n\n"
-                f"User: {request_details.get('user_name', 'Unknown')}\n"
-                f"Plan: {plan.get('name', 'Unknown')}\n"
-                f"Total: Rs. {total_amount:,.0f}\n\n"
-                f"*Breakdown:*\n"
-                f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅\n"
-                f"• 💵 Cash: Rs. {cash_amount:,.0f} (Pending)\n\n"
-                f"Subscription activated. Admin can now confirm cash payment."
-            )
-            logger.info(f"Admin {query.from_user.id} approved split UPI payment for request {request_id}")
-        else:
-            await query.edit_message_text("❌ Failed to approve subscription")
-            logger.error(f"Failed to approve subscription for request {request_id}")
-    
-    except Exception as e:
-        logger.error(f"Error in callback_admin_approve_split_upi: {e}", exc_info=True)
-        try:
-            await query.edit_message_text("❌ Error approving UPI payment")
-        except:
-            pass
+        return ConversationHandler.END
 
 
 async def callback_admin_confirm_split_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1931,15 +1910,24 @@ async def callback_admin_final_confirm(update: Update, context: ContextTypes.DEF
         success = approve_subscription(request_id, final_bill, end_date)
         
         if success:
-            # Update AR ledger with actual amounts
+            # Update AR ledger with actual amounts; prefer finalizing any pending evidence
+            from src.database.subscription_operations import get_pending_payment, finalize_pending_payment
             from src.database.ar_operations import record_payment
             user_id = request_details['user_id']
-            
+
             if upi_received > 0:
-                record_payment(user_id, 'subscription', request_id, upi_received, 'upi')
+                pending = get_pending_payment(request_id, 'upi')
+                if pending and pending.get('id'):
+                    finalize_pending_payment(pending['id'], reference=pending.get('reference'))
+                else:
+                    record_payment(user_id, 'subscription', request_id, upi_received, 'upi')
             if cash_received > 0:
-                record_payment(user_id, 'subscription', request_id, cash_received, 'cash')
-            
+                pending_cash = get_pending_payment(request_id, 'cash')
+                if pending_cash and pending_cash.get('id'):
+                    finalize_pending_payment(pending_cash['id'], reference=pending_cash.get('reference'))
+                else:
+                    record_payment(user_id, 'subscription', request_id, cash_received, 'cash')
+
             # Schedule reminders if balance > 0 (48 hours from now)
             if balance > 0:
                 from src.utils.event_dispatcher import schedule_followups
@@ -2585,18 +2573,13 @@ async def callback_split_upi_skip_screenshot(update: Update, context: ContextTyp
         await query.message.reply_text("❌ Payment data not found")
         return ConversationHandler.END
     
-    from src.database.subscription_operations import (
-        create_split_payment_receivable, record_split_upi_payment
-    )
-    
-    # Create split receivable
-    split_result = create_split_payment_receivable(user_id, request_id, split_upi_amount, split_cash_amount)
-    if not split_result:
-        await query.message.reply_text("❌ Error creating split payment ledger. Please contact admin.")
+    from src.database.subscription_operations import create_pending_payment
+
+    # Persist pending UPI evidence (defer ledger writes until admin confirms)
+    pending = create_pending_payment(user_id, request_id, split_upi_amount, 'upi', transaction_ref, None)
+    if not pending:
+        await query.message.reply_text("❌ Error saving payment evidence. Please contact admin.")
         return ConversationHandler.END
-    
-    # Record UPI payment
-    record_split_upi_payment(user_id, request_id, split_upi_amount, transaction_ref)
     
     keyboard = [
         [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
@@ -2642,18 +2625,13 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
     
     # For split payments, create AR receivable with both lines
     if is_split and split_upi_amount and split_cash_amount:
-        from src.database.subscription_operations import (
-            create_split_payment_receivable, record_split_upi_payment
-        )
-        
-        # Create split receivable
-        split_result = create_split_payment_receivable(user_id, request_id, split_upi_amount, split_cash_amount)
-        if not split_result:
-            await query.message.reply_text("❌ Error creating split payment ledger. Please contact admin.")
+        from src.database.subscription_operations import create_pending_payment
+
+        # Persist pending UPI evidence (defer ledger writes until admin confirms)
+        pending = create_pending_payment(user_id, request_id, split_upi_amount, 'upi', transaction_ref, None)
+        if not pending:
+            await query.message.reply_text("❌ Error saving payment evidence. Please contact admin.")
             return ConversationHandler.END
-        
-        # Record UPI payment
-        record_split_upi_payment(user_id, request_id, split_upi_amount, transaction_ref)
         
         keyboard = [
             [InlineKeyboardButton("💬 WhatsApp Support", url="https://wa.me/9158243377")],
@@ -2729,12 +2707,12 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
         return ConversationHandler.END
     
     # Regular UPI payment (non-split)
-    # Record payment without screenshot
-    from src.database.subscription_operations import record_payment
-    payment = record_payment(user_id, request_id, plan['amount'], 'upi', transaction_ref, None)
-    
+    # Persist pending UPI evidence (defer ledger writes until admin confirms)
+    from src.database.subscription_operations import create_pending_payment
+    payment = create_pending_payment(user_id, request_id, plan['amount'], 'upi', transaction_ref, None)
+
     if not payment:
-        await query.message.reply_text("❌ Error recording payment. Please contact admin.")
+        await query.message.reply_text("❌ Error saving payment evidence. Please contact admin.")
         return ConversationHandler.END
     
     keyboard = [
@@ -2819,12 +2797,12 @@ async def callback_upi_submit_with_screenshot(update: Update, context: ContextTy
         await query.message.reply_text("❌ Payment data not found")
         return ConversationHandler.END
     
-    # Record payment with screenshot
-    from src.database.subscription_operations import record_payment
-    payment = record_payment(user_id, request_id, plan['amount'], 'upi', transaction_ref, screenshot_file_id)
-    
+    # Persist pending UPI evidence (with screenshot) — defer ledger writes until admin confirms
+    from src.database.subscription_operations import create_pending_payment
+    payment = create_pending_payment(user_id, request_id, plan['amount'], 'upi', transaction_ref, screenshot_file_id)
+
     if not payment:
-        await query.message.reply_text("❌ Error recording payment. Please contact admin.")
+        await query.message.reply_text("❌ Error saving payment evidence. Please contact admin.")
         return ConversationHandler.END
     
     keyboard = [

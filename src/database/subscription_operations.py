@@ -14,6 +14,86 @@ from src.database.ar_operations import (
     update_receivable_status,
 )
 
+def create_pending_payment(user_id: int, request_id: int, amount: float, payment_method: str, reference: str = None, screenshot_file_id: str = None) -> dict:
+    """Create a pending payment record (evidence) without mirroring to AR ledger."""
+    try:
+        result = execute_query(
+            """
+            INSERT INTO subscription_payments (user_id, request_id, amount, payment_method, reference, screenshot_file_id, status, paid_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', NULL)
+            RETURNING id, user_id, amount, payment_method, status
+            """,
+            (user_id, request_id, amount, payment_method, reference, screenshot_file_id),
+            fetch_one=True,
+        )
+        if result:
+            logger.info(f"Pending payment created: User {user_id}, Request {request_id}, Amount {amount}, Method {payment_method}")
+            return result
+    except Exception as e:
+        logger.error(f"Error creating pending payment: {e}")
+    return None
+
+
+def get_pending_payment(request_id: int, payment_method: str) -> dict:
+    """Fetch a pending payment record for a request and payment method."""
+    try:
+        row = execute_query(
+            "SELECT id, user_id, amount, payment_method, reference, screenshot_file_id FROM subscription_payments WHERE request_id = %s AND payment_method = %s AND status = 'pending' LIMIT 1",
+            (request_id, payment_method),
+            fetch_one=True,
+        )
+        return row
+    except Exception as e:
+        logger.error(f"Error fetching pending payment: {e}")
+    return None
+
+
+def finalize_pending_payment(payment_id: int, reference: str = None, screenshot_file_id: str = None) -> dict:
+    """Mark a pending payment as completed and mirror into AR ledger."""
+    try:
+        # Update the pending payment to completed and set paid_at
+        updated = execute_query(
+            """
+            UPDATE subscription_payments
+            SET status = 'completed', reference = COALESCE(%s, reference), screenshot_file_id = COALESCE(%s, screenshot_file_id), paid_at = NOW()
+            WHERE id = %s
+            RETURNING id, user_id, request_id, amount, payment_method
+            """,
+            (reference, screenshot_file_id, payment_id),
+            fetch_one=True,
+        )
+
+        if not updated:
+            logger.error(f"Pending payment not found to finalize: {payment_id}")
+            return None
+
+        # Mirror into AR ledger
+        receivable = get_receivable_by_source('subscription', updated['request_id'])
+        if not receivable:
+            receivable = create_receivable(
+                user_id=updated['user_id'],
+                receivable_type='subscription',
+                source_id=updated['request_id'],
+                bill_amount=updated.get('amount', 0),
+                discount_amount=0,
+                final_amount=updated.get('amount', 0),
+            )
+
+        rid = receivable.get('receivable_id') if receivable else None
+        if rid:
+            create_transactions(
+                receivable_id=rid,
+                lines=[{'method': updated['payment_method'], 'amount': updated['amount'], 'reference': reference}],
+                admin_user_id=None,
+            )
+            update_receivable_status(rid)
+
+        logger.info(f"Finalized pending payment {payment_id} and mirrored to AR")
+        return updated
+    except Exception as e:
+        logger.error(f"Error finalizing pending payment: {e}")
+    return None
+
 logger = logging.getLogger(__name__)
 
 # Subscription Plans
