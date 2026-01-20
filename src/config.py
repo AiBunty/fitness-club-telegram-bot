@@ -39,3 +39,15 @@ def _to_float(val: str, default: float) -> float:
 GEOFENCE_LAT = _to_float(os.getenv('GEOFENCE_LAT', '0'), 0.0)
 GEOFENCE_LNG = _to_float(os.getenv('GEOFENCE_LNG', '0'), 0.0)
 GEOFENCE_RADIUS_M = int(os.getenv('GEOFENCE_RADIUS_M', '10'))
+
+# Gym Studio profile defaults (editable via admin settings)
+GYM_PROFILE = {
+    'name': os.getenv('GYM_NAME', 'Wanis Level Up Studio'),
+    'address': os.getenv('GYM_ADDRESS', '101, 1st floor, Padma Vishwa Orchid,\nCricket Ground, opposite Doctor BS Moonje Marg,\nabove Pepperfry Showroom,\nMahatma Nagar, Parijat Nagar,\nNashik, Maharashtra 422005'),
+    'phone': os.getenv('GYM_PHONE', '091582 43377'),
+    'gst': os.getenv('GYM_GST', ''),
+    'logo_url': os.getenv('GYM_LOGO_URL', ''),
+    'timings': os.getenv('GYM_TIMINGS', 'Mon–Sat: 6–11 AM, 5–9 PM\nSunday: Closed'),
+    'facebook': os.getenv('GYM_FACEBOOK', 'https://www.facebook.com/wanisclublevelup'),
+    'instagram': os.getenv('GYM_INSTAGRAM', 'https://www.instagram.com/wanisclub_levelup')
+}

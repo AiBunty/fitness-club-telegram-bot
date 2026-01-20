@@ -49,6 +49,7 @@ ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("🍽️ Manual Shake Deduction", callback_data="cmd_manual_shake_deduction")],
     [InlineKeyboardButton("💳 Pending Shake Purchases", callback_data="cmd_pending_shake_purchases")],
     [InlineKeyboardButton("🛒 Manage Store", callback_data="cmd_manage_store")],
+    [InlineKeyboardButton("🧾 Invoices", callback_data="cmd_invoices")],
     [InlineKeyboardButton("💳 Record Payment", callback_data="ar_record_payment")],
     [InlineKeyboardButton("💳 Credit Summary", callback_data="ar_credit_summary")],
     [InlineKeyboardButton("📤 Export Overdue", callback_data="ar_export_overdue")],

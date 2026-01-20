@@ -147,6 +147,34 @@ async def ar_review_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Status: {updated.get('status','pending').upper()}\n\n"
             f"Breakdown:\n{method_text or '—'}"
         )
+        # If this receivable corresponds to an invoice and is fully paid, generate and send a receipt
+        try:
+            from src.database.ar_operations import get_receivable_by_source
+            from src.utils.invoice_store import load_invoice
+            from src.utils.invoice import generate_receipt_pdf
+            rec = receivable or {}
+            if rec.get('receivable_type') == 'invoice' and updated.get('status') == 'paid':
+                source_id = rec.get('source_id')
+                inv = load_invoice(source_id)
+                if inv:
+                    # Build receipt payload
+                    receipt = {
+                        'receipt_no': f"RCT-{datetime.now().strftime('%Y%m%d')}-{rid}",
+                        'date': datetime.now().strftime('%d %b %Y'),
+                        'billed_to': inv.get('billed_to', {}),
+                        'methods': methods,
+                        'total_paid': breakdown.get('received_total', 0.0),
+                        'balance': breakdown.get('balance', 0.0),
+                        'invoice_ref': inv.get('invoice_no')
+                    }
+                    pdf_buf = generate_receipt_pdf(receipt, __import__('src.config', fromlist=['GYM_PROFILE']).GYM_PROFILE)
+                    try:
+                        await context.bot.send_document(chat_id=user_id, document=pdf_buf, filename=f"receipt_{receipt['receipt_no']}.pdf")
+                        await context.bot.send_message(chat_id=user_id, text="✅ Payment received. Receipt sent.")
+                    except Exception as e:
+                        logger.debug(f"Could not send receipt PDF to user {user_id}: {e}")
+        except Exception:
+            logger.debug("No invoice receipt generated or an error occurred.")
         return ConversationHandler.END
     elif data == 'ar_cancel':
         await query.edit_message_text("❌ Payment recording cancelled.")

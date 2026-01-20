@@ -335,6 +335,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     )
     from src.handlers.role_keyboard_handlers import show_role_menu
     from src.handlers.role_keyboard_handlers import show_manage_staff_submenu, show_manage_admins_submenu
+    from src.handlers.invoice_handlers import cmd_create_invoice_start, inv_review_actions
     
     query = update.callback_query
     logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id} - Chat ID: {query.message.chat_id if query.message else 'NO MESSAGE'}")
@@ -419,6 +420,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await show_manage_staff_submenu(update, context)
     elif query.data == "admin_manage_admins":
         await show_manage_admins_submenu(update, context)
+    elif query.data == "cmd_invoices":
+        await cmd_create_invoice_start(update, context)
     elif query.data == "cmd_add_staff":
         await cmd_add_staff(update, context)
     elif query.data == "cmd_remove_staff":
@@ -436,6 +439,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_admin_back":
         # Back to admin main menu
         await show_role_menu(update, context)
+    elif query.data == "inv_add_another" or query.data == "inv_send" or query.data == "inv_cancel":
+        # Invoice review actions
+        await inv_review_actions(update, context)
     elif query.data == "admin_delete_user":
         await cmd_delete_user(update, context)
     elif query.data == "admin_ban_user":
