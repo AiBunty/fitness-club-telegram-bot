@@ -54,12 +54,8 @@ ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("📤 Export Overdue", callback_data="ar_export_overdue")],
     [InlineKeyboardButton("📊 Notifications", callback_data="cmd_notifications")],
     [InlineKeyboardButton("👥 Manage Users", callback_data="cmd_list_users")],
-    [InlineKeyboardButton("➕ Add Staff", callback_data="cmd_add_staff")],
-    [InlineKeyboardButton("➖ Remove Staff", callback_data="cmd_remove_staff")],
-    [InlineKeyboardButton("📋 List Staff", callback_data="cmd_list_staff")],
-    [InlineKeyboardButton("➕ Add Admin", callback_data="cmd_add_admin")],
-    [InlineKeyboardButton("➖ Remove Admin", callback_data="cmd_remove_admin")],
-    [InlineKeyboardButton("📋 List Admins", callback_data="cmd_list_admins")],
+    [InlineKeyboardButton("👥 Manage Staff", callback_data="admin_manage_staff")],
+    [InlineKeyboardButton("🛡 Manage Admins", callback_data="admin_manage_admins")],
     [InlineKeyboardButton("🔢 Get My ID", callback_data="cmd_get_telegram_id")],
     [InlineKeyboardButton("🆔 Who Am I?", callback_data="cmd_whoami")],
 ])
@@ -190,4 +186,49 @@ async def show_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=menu)
     elif update.callback_query:
         await update.callback_query.message.edit_text(msg, reply_markup=menu)
+
+
+async def show_manage_staff_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show Manage Staff submenu (uses existing cmd_* callbacks)."""
+    # Ensure only admins can access
+    uid = update.callback_query.from_user.id if update.callback_query else update.effective_user.id
+    if not is_admin_id(uid):
+        await (update.message or update.callback_query.message).reply_text("❌ Admin access denied.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Staff", callback_data="cmd_add_staff")],
+        [InlineKeyboardButton("➖ Remove Staff", callback_data="cmd_remove_staff")],
+        [InlineKeyboardButton("📋 List Staff", callback_data="cmd_list_staff")],
+        [InlineKeyboardButton("⬅ Back", callback_data="cmd_admin_back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text("👥 Manage Staff\n\nChoose an action:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("👥 Manage Staff\n\nChoose an action:", reply_markup=reply_markup)
+
+
+async def show_manage_admins_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show Manage Admins submenu (uses existing cmd_* callbacks)."""
+    uid = update.callback_query.from_user.id if update.callback_query else update.effective_user.id
+    if not is_admin_id(uid):
+        await (update.message or update.callback_query.message).reply_text("❌ Admin access denied.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Admin", callback_data="cmd_add_admin")],
+        [InlineKeyboardButton("➖ Remove Admin", callback_data="cmd_remove_admin")],
+        [InlineKeyboardButton("📋 List Admins", callback_data="cmd_list_admins")],
+        [InlineKeyboardButton("⬅ Back", callback_data="cmd_admin_back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text("🛡 Manage Admins\n\nChoose an action:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("🛡 Manage Admins\n\nChoose an action:", reply_markup=reply_markup)
 

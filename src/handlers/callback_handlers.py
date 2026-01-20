@@ -334,6 +334,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         handle_commerce_callbacks, cmd_user_store
     )
     from src.handlers.role_keyboard_handlers import show_role_menu
+    from src.handlers.role_keyboard_handlers import show_manage_staff_submenu, show_manage_admins_submenu
     
     query = update.callback_query
     logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id} - Chat ID: {query.message.chat_id if query.message else 'NO MESSAGE'}")
@@ -414,6 +415,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_pending_shakes(update, context)
     elif query.data == "cmd_admin_dashboard":
         await cmd_admin_dashboard(update, context)
+    elif query.data == "admin_manage_staff":
+        await show_manage_staff_submenu(update, context)
+    elif query.data == "admin_manage_admins":
+        await show_manage_admins_submenu(update, context)
     elif query.data == "cmd_add_staff":
         await cmd_add_staff(update, context)
     elif query.data == "cmd_remove_staff":
@@ -428,6 +433,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_list_admins(update, context)
     elif query.data == "cmd_list_users":
         await cmd_list_users(update, context)
+    elif query.data == "cmd_admin_back":
+        # Back to admin main menu
+        await show_role_menu(update, context)
     elif query.data == "admin_delete_user":
         await cmd_delete_user(update, context)
     elif query.data == "admin_ban_user":
