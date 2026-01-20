@@ -186,3 +186,21 @@ def get_pending_users():
         ORDER BY created_at ASC
     """
     return execute_query(query)
+
+
+def search_users(term: str, limit: int = 10, offset: int = 0):
+    """Search users by full_name or telegram_username using ILIKE for partial matches."""
+    try:
+        like = f"%{term}%"
+        query = """
+            SELECT user_id, telegram_username, full_name
+            FROM users
+            WHERE (full_name ILIKE %s OR telegram_username ILIKE %s)
+            ORDER BY full_name ASC
+            LIMIT %s OFFSET %s
+        """
+        rows = execute_query(query, (like, like, limit, offset))
+        return rows or []
+    except Exception as e:
+        logger.error(f"Error searching users for term '{term}': {e}")
+        return []

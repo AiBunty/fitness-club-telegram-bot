@@ -16,6 +16,7 @@ INV_ENTER_USER, INV_ADD_ITEM_NAME, INV_ADD_ITEM_AMOUNT, INV_REVIEW = range(4)
 
 
 async def cmd_create_invoice_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start invoice creation: present user selection options (Search, Manual entry, Cancel)."""
     query = update.callback_query
     if query:
         await query.answer()
@@ -31,7 +32,17 @@ async def cmd_create_invoice_start(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     context.user_data['invoice'] = {'admin_id': admin_id, 'items': []}
-    await (query.message.reply_text if query else update.message.reply_text)("👤 Enter the user's Telegram ID to bill:")
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Search User", callback_data="inv_search_user")],
+        [InlineKeyboardButton("⌨️ Enter Telegram ID Manually", callback_data="inv_manual_entry")],
+        [InlineKeyboardButton("⬅ Cancel", callback_data="inv_cancel")],
+    ])
+
+    if query:
+        await query.edit_message_text("👤 Select User for Invoice", reply_markup=kb)
+    else:
+        await update.message.reply_text("👤 Select User for Invoice", reply_markup=kb)
     return INV_ENTER_USER
 
 
@@ -44,6 +55,66 @@ async def inv_enter_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❌ Please enter a valid numeric Telegram ID.")
         return INV_ENTER_USER
+
+
+async def inv_search_user_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("🔎 Type name, username, or part of name:")
+    return 'INV_SEARCH_QUERY'
+
+
+async def inv_search_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Admin typed search term
+    try:
+        term = update.message.text.strip()
+        from src.database.user_operations import search_users
+        results = search_users(term, limit=10, offset=0)
+        if not results:
+            await update.message.reply_text("No users found. Try a different query.")
+            return 'INV_SEARCH_QUERY'
+
+        # Build list with Select buttons
+        buttons = []
+        for row in results:
+            uid = row.get('user_id')
+            uname = row.get('telegram_username') or ''
+            fullname = row.get('full_name') or ''
+            text = f"{fullname} ({'@'+uname if uname else ''})\nID: {uid}"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Select", callback_data=f"inv_select_{uid}")]])
+            await update.message.reply_text(text, reply_markup=kb)
+
+        # Add pagination note if needed
+        if len(results) == 10:
+            await update.message.reply_text("Showing first 10 results. Refine search or try pagination later.")
+
+        return INV_REVIEW
+    except Exception as e:
+        await update.message.reply_text("Error searching users. Try again.")
+        return INV_ENTER_USER
+
+
+async def inv_select_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        uid = int(query.data.split("_")[-1])
+        from src.database.user_operations import get_user
+        user = get_user(uid)
+        if not user:
+            await query.edit_message_text("❌ User not found or no longer exists.")
+            return ConversationHandler.END
+
+        # Store selected user id and confirm
+        context.user_data['invoice']['user_id'] = uid
+        await query.edit_message_text(f"User selected: {user.get('full_name','Unknown')} ({uid})")
+
+        # Continue to item entry
+        await context.bot.send_message(chat_id=query.from_user.id, text="✏️ Enter item name (first item):")
+        return INV_ADD_ITEM_NAME
+    except Exception as e:
+        await query.edit_message_text("❌ Error selecting user. Try again.")
+        return ConversationHandler.END
 
 
 async def inv_add_item_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
