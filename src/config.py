@@ -13,7 +13,8 @@ DATABASE_CONFIG = {
     'port': os.getenv('DB_PORT', '5432'),
     'database': os.getenv('DB_NAME', 'fitness_club_db'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', '')
+    'password': os.getenv('DB_PASSWORD', ''),
+    'sslmode': 'require'  # Required for Neon cloud database
 }
 
 POINTS_CONFIG = {
