@@ -585,36 +585,40 @@ async def handle_custom_water_interval_input(update: Update, context: ContextTyp
     user_id = update.effective_user.id
     text = update.message.text.strip()
     
-    if context.user_data.get('waiting_for_custom_water_interval'):
-        context.user_data['waiting_for_custom_water_interval'] = False
+    # CRITICAL: Only process if explicitly waiting for custom interval
+    # Otherwise allow other handlers (ConversationHandlers) to process the message
+    if not context.user_data.get('waiting_for_custom_water_interval'):
+        return
+    
+    context.user_data['waiting_for_custom_water_interval'] = False
+    
+    try:
+        interval = int(text)
         
-        try:
-            interval = int(text)
-            
-            # Validate range
-            if interval < 15 or interval > 480:
-                await update.message.reply_text(
-                    "❌ Invalid interval! Must be between 15 and 480 minutes.",
-                    parse_mode="Markdown"
-                )
-                return
-            
-            # Save the custom interval
-            success = set_water_reminder_interval(user_id, interval)
-            
-            if success:
-                await update.message.reply_text(
-                    f"✅ Water reminder interval set to **{interval} minutes**",
-                    parse_mode="Markdown"
-                )
-                logger.info(f"Custom water interval set to {interval} minutes for user {user_id}")
-            else:
-                await update.message.reply_text("❌ Failed to set interval")
-        except ValueError:
+        # Validate range
+        if interval < 15 or interval > 480:
             await update.message.reply_text(
-                "❌ Please enter a valid number (e.g., 30, 60, 90)",
+                "❌ Invalid interval! Must be between 15 and 480 minutes.",
                 parse_mode="Markdown"
             )
+            return
+        
+        # Save the custom interval
+        success = set_water_reminder_interval(user_id, interval)
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ Water reminder interval set to **{interval} minutes**",
+                parse_mode="Markdown"
+            )
+            logger.info(f"Custom water interval set to {interval} minutes for user {user_id}")
+        else:
+            await update.message.reply_text("❌ Failed to set interval")
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Please enter a valid number (e.g., 30, 60, 90)",
+            parse_mode="Markdown"
+        )
 
 
 def get_reminder_conversation_handler():

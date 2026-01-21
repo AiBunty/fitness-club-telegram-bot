@@ -28,6 +28,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show rich welcome with a Register button; do not start registration yet."""
     msg = update.effective_message
     user_id = update.effective_user.id
+    
+    # Track user in registry for invoice search
+    from src.utils.user_registry import track_user
+    try:
+        track_user(
+            user_id=user_id,
+            first_name=update.effective_user.first_name or '',
+            last_name=update.effective_user.last_name or '',
+            username=update.effective_user.username or ''
+        )
+    except Exception as e:
+        logger.warning(f"[USER_REGISTRY] Error tracking user: {e}")
+    
     payload = context.args[0] if context.args else None
     
     # Set commands based on user's role (async, doesn't block)

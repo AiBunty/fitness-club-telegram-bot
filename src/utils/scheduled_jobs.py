@@ -146,20 +146,32 @@ def schedule_all_user_reminders(application):
     """Bootstrap per-user reminders at startup. Idempotent."""
     try:
         from src.database.reminder_operations import get_users_with_water_reminders_enabled, get_users_with_weight_reminders_enabled
+        
+        logger.info("[BOOTSTRAP] Starting user reminder scheduling...")
 
-        # Water
-        water_users = get_users_with_water_reminders_enabled() or []
-        for u in water_users:
-            uid = u.get('user_id')
-            interval = u.get('interval_minutes') or 60
-            schedule_user_water_reminder(application, uid, interval)
+        # Water - with timeout protection
+        try:
+            logger.info("[BOOTSTRAP] Querying water reminder users...")
+            water_users = get_users_with_water_reminders_enabled() or []
+            logger.info(f"[BOOTSTRAP] Found {len(water_users)} users with water reminders")
+            for u in water_users:
+                uid = u.get('user_id')
+                interval = u.get('interval_minutes') or 60
+                schedule_user_water_reminder(application, uid, interval)
+        except Exception as e:
+            logger.warning(f"[BOOTSTRAP] Could not load water reminders: {e}")
 
-        # Weight
-        weight_users = get_users_with_weight_reminders_enabled() or []
-        for u in weight_users:
-            uid = u.get('user_id')
-            time_str = u.get('reminder_time') or '06:00'
-            schedule_user_weight_reminder(application, uid, time_str)
+        # Weight - with timeout protection
+        try:
+            logger.info("[BOOTSTRAP] Querying weight reminder users...")
+            weight_users = get_users_with_weight_reminders_enabled() or []
+            logger.info(f"[BOOTSTRAP] Found {len(weight_users)} users with weight reminders")
+            for u in weight_users:
+                uid = u.get('user_id')
+                time_str = u.get('reminder_time') or '06:00'
+                schedule_user_weight_reminder(application, uid, time_str)
+        except Exception as e:
+            logger.warning(f"[BOOTSTRAP] Could not load weight reminders: {e}")
 
         logger.info("[SCHEDULER] started")
     except Exception as e:

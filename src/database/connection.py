@@ -19,15 +19,19 @@ class DatabaseConnectionPool:
     
     def get_pool(self):
         if self._pool is None or self._pool.closed:
-            # Create pool with min 5 connections, max 50 connections
-            # Handles 500-1000 concurrent users comfortably
-            # Stays well under PostgreSQL default max_connections=100
+            # Create pool with min 2 connections, max 20 connections
+            # Faster initialization on first load
+            # minconn=2 means only 2 connections initialized upfront instead of 5
+            db_config = dict(DATABASE_CONFIG)
+            # Add connection timeout
+            db_config['connect_timeout'] = 10
+            logger.info(f"[DB] Attempting connection to {db_config.get('host')}:{db_config.get('port')}...")
             self._pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=5,
-                maxconn=50,
-                **DATABASE_CONFIG
+                minconn=2,
+                maxconn=20,
+                **db_config
             )
-            logger.info("Database connection pool created (5-50 connections)")
+            logger.info("Database connection pool created (2-20 connections)")
         return self._pool
     
     def close_pool(self):

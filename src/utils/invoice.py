@@ -49,17 +49,38 @@ def generate_invoice_pdf(invoice: Dict[str, Any], profile: Dict[str, Any]) -> io
     y -= 5 * mm
     c.drawString(30 * mm, y, f"Telegram ID: {billed.get('telegram_id','')}")
 
-    # Items table
+    # Items table with detailed columns
     items: List[Dict[str, Any]] = invoice.get('items', [])
-    table_data = [["Item", "Amount (₹)"]]
+    table_data = [["Item Name", "Qty", "Rate", "Discount %", "Taxable Amount", "GST Amount", "Line Total"]]
     for it in items:
-        table_data.append([it.get('name', ''), f"{float(it.get('amount',0)):.2f}"])
-    # Totals
-    subtotal = sum(float(it.get('amount', 0)) for it in items)
-    table_data.append(["Subtotal", f"{subtotal:.2f}"])
-    table_data.append(["Total", f"{invoice.get('total', subtotal):.2f}"])
+        rate = float(it.get('rate', 0))
+        qty = int(it.get('quantity', 1))
+        disc = float(it.get('discount_percent', 0))
+        taxable = float(it.get('taxable_amount', rate * qty - (rate * qty * disc / 100)))
+        gst_amt = float(it.get('gst_amount', 0))
+        total = float(it.get('line_total', taxable + gst_amt))
+        table_data.append([
+            it.get('name', ''),
+            str(qty),
+            f"{rate:.2f}",
+            f"{disc:.2f}",
+            f"{taxable:.2f}",
+            f"{gst_amt:.2f}",
+            f"{total:.2f}"
+        ])
 
-    table = Table(table_data, colWidths=[120 * mm, 40 * mm])
+    # Totals
+    items_subtotal = sum(float(it.get('line_total', 0)) for it in items)
+    shipping = float(invoice.get('shipping', 0) or 0)
+    gst_total = sum(float(it.get('gst_amount', 0)) for it in items)
+    final_total = float(invoice.get('total', items_subtotal + shipping))
+    table_data.append(["Items Subtotal", "", "", "", "", "", f"{items_subtotal:.2f}"])
+    table_data.append(["Shipping / Delivery", "", "", "", "", "", f"{shipping:.2f}"])
+    if gst_total > 0:
+        table_data.append(["GST Total", "", "", "", "", "", f"{gst_total:.2f}"])
+    table_data.append(["Final Bill Amount", "", "", "", "", "", f"{final_total:.2f}"])
+
+    table = Table(table_data, colWidths=[50*mm, 15*mm, 20*mm, 20*mm, 25*mm, 20*mm, 25*mm])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),

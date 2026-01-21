@@ -2,9 +2,11 @@ from datetime import time as dt_time
 import logging
 import sys
 import os
-from telegram import BotCommand, MenuButtonCommands
+import asyncio
+from telegram import BotCommand, MenuButtonCommands, Update
 from telegram.ext import (
-    Application, 
+    Application,
+    ContextTypes,
     CommandHandler,
     ConversationHandler,
     MessageHandler,
@@ -27,6 +29,7 @@ from src.handlers.role_keyboard_handlers import (
     show_role_menu
 )
 from src.handlers.callback_handlers import handle_callback_query
+from src.handlers.debug_handlers import raw_update_logger
 from src.handlers.activity_handlers import (
     cmd_weight, get_weight_input, WEIGHT_VALUE,
     cmd_water, get_water, WATER_CUPS,
@@ -267,16 +270,65 @@ async def set_commands_for_user(user_id: int, bot) -> None:
 def main():
 
     logger.info("Testing database connection...")
-    if not test_connection():
-        logger.error("Database connection failed!")
-        sys.exit(1)
+    # Allow skipping DB test for local debugging by setting SKIP_DB_TEST=1
+    if os.environ.get('SKIP_DB_TEST') != '1':
+        if not test_connection():
+            logger.error("Database connection failed!")
+            sys.exit(1)
+    else:
+        logger.info("SKIP_DB_TEST=1 set — skipping DB connection test")
     
     logger.info("Database OK! Starting bot...")
     
+    # Reduce socket timeout for faster initialization
+    import socket
+    socket.setdefaulttimeout(5)
+    
+    logger.info("[APP] Building Telegram Application with token...")
+    # Disable SSL verification as workaround for Windows SSL timeout issues
+    import ssl
+    import certifi
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    logger.info("[APP] Telegram Application built successfully")
 
     # Register global command menu so Telegram shows command buttons.
     application.post_init = _set_bot_commands
+    
+    # User registry tracking (pre-handler to catch all messages)
+    async def track_user_on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Track user in registry for invoice search - runs on every message.
+        
+        CRITICAL: Must NOT consume update - always allow propagation.
+        """
+        # Skip if not a Message update (e.g., CallbackQuery should never reach here)
+        if not update.message:
+            logger.debug("[TRACKER] Skipping non-message update")
+            return False
+        
+        if not update.effective_user:
+            return False
+        
+        # Track user but DON'T consume the update
+        try:
+            from src.utils.user_registry import track_user
+            track_user(
+                user_id=update.effective_user.id,
+                first_name=update.effective_user.first_name or '',
+                last_name=update.effective_user.last_name or '',
+                username=update.effective_user.username or ''
+            )
+            logger.debug(f"[TRACKER] message tracked user_id={update.effective_user.id}")
+        except Exception as e:
+            logger.debug(f"[TRACKER] Error: {e}")
+        
+        # CRITICAL: Return False to allow other handlers to process this update
+        return False
+    
+    application.add_handler(MessageHandler(filters.ALL, track_user_on_message), group=-1)
     
     # Registration conversation
     # Registration conversation (triggered via /register or Register button)
@@ -408,6 +460,9 @@ def main():
     application.add_handler(get_manage_users_conversation_handler())
     application.add_handler(get_template_conversation_handler())
     application.add_handler(get_followup_conversation_handler())
+
+    # DEBUG: log raw incoming updates without blocking conversation handlers
+    application.add_handler(MessageHandler(filters.ALL, raw_update_logger), group=1, block=False)
     
     # Subscription handlers - MUST be BEFORE numeric handlers
     application.add_handler(get_subscription_conversation_handler())
@@ -423,6 +478,24 @@ def main():
 
     # Accounts Receivable (split-payment) conversation
     application.add_handler(get_ar_conversation_handler())
+    
+    # Invoice v2 (re-enabled with lazy PDF import)
+    from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
+    application.add_handler(get_invoice_v2_handler())
+    # User action callbacks (pay/reject)
+    application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
+    application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
+    
+    # GST & Store items handlers
+    from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
+    gst_conv, store_conv = get_store_and_gst_handlers()
+    application.add_handler(gst_conv)
+    application.add_handler(store_conv)
+    
+    # OLD Invoice pay/reject callbacks (DEPRECATED - Use Invoice v2)
+    # from src.handlers.invoice_handlers import invoice_pay_clicked, invoice_reject_clicked
+    # application.add_handler(CallbackQueryHandler(invoice_pay_clicked, pattern=r"^invoice_pay_\d+$"))
+    # application.add_handler(CallbackQueryHandler(invoice_reject_clicked, pattern=r"^invoice_reject_\d+$"))
     
     # Store handlers
     # Register cart-based store handlers
@@ -498,7 +571,9 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_admin_dashboard, pattern="^admin_dashboard$"))
     
     # Callback query handler for inline buttons (exclude subscription/payment/conversation callbacks)
-    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel)"))
+    # Exclude invoice entry callbacks (cmd_invoices, inv2_*) so ConversationHandler can handle it
+    # Legacy inv_* also excluded (deprecated)
+    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel|cmd_invoices|inv_|inv2_)"))
     application.add_handler(CallbackQueryHandler(handle_analytics_callback))
     application.add_handler(CallbackQueryHandler(callback_view_notification, pattern="^notif_"))
     application.add_handler(CallbackQueryHandler(callback_delete_notification, pattern="^delete_notif_"))
@@ -543,7 +618,9 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_quick_turn_off_water_reminder, pattern="^quick_turn_off_water_reminder$"))
     application.add_handler(CallbackQueryHandler(callback_quick_water_interval, pattern="^quick_water_interval_"))
     application.add_handler(CallbackQueryHandler(callback_quick_water_interval_custom, pattern="^quick_water_interval_custom$"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_water_interval_input))
+    
+    # Global text handler moved to group=1 to allow conversation handlers (group=0) to process first
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_water_interval_input), group=1)
     
     # Schedule daily jobs
     job_queue = application.job_queue
@@ -575,7 +652,12 @@ def main():
     # Per-user water & weight reminders (bootstrap)
     try:
         from src.utils.scheduled_jobs import schedule_all_user_reminders
-        schedule_all_user_reminders(application)
+        # During local debugging we may skip scheduling user reminders which
+        # execute DB queries at startup. Honor SKIP_DB_TEST, SKIP_DB_MIGRATIONS, or SKIP_SCHEDULING.
+        if os.environ.get('SKIP_DB_TEST') == '1' or os.environ.get('SKIP_DB_MIGRATIONS') == '1' or os.environ.get('SKIP_SCHEDULING') == '1':
+            logger.info("Skipping scheduling of user reminders (SKIP_DB_TEST/SKIP_DB_MIGRATIONS/SKIP_SCHEDULING set)")
+        else:
+            schedule_all_user_reminders(application)
     except Exception as e:
         logger.warning(f"Per-user reminder bootstrap failed: {e}")
     
@@ -697,48 +779,54 @@ def main():
     # ================================================================
     # Start Flask web server on main thread (waitress WSGI server)
     # This allows QR attendance endpoints while polling continues
-    try:
-        import threading
-        import time
-        from src.web.app import create_app
-        from waitress import serve
-        from src.utils.admin_notifications import set_telegram_app
-        
-        # Set telegram app reference for admin notifications
-        set_telegram_app(application)
-        logger.info("Telegram app reference set for admin notifications")
-        
-        # Create Flask app
-        flask_app = create_app()
-        logger.info("Flask app created for QR attendance")
-        
-        # Start Flask on separate thread using waitress
-        def run_flask():
-            logger.info("Starting Flask web server on :5000...")
+    if os.environ.get('SKIP_FLASK') != '1':
+        try:
+            import threading
+            import time
+            from src.web.app import create_app
+            from waitress import serve
+            from src.utils.admin_notifications import set_telegram_app
+            
+            # Set telegram app reference for admin notifications
+            set_telegram_app(application)
+            logger.info("Telegram app reference set for admin notifications")
+            
+            # Create Flask app
+            flask_app = create_app()
+            logger.info("Flask app created for QR attendance")
+            
+            # Start Flask on separate thread using waitress
+            def run_flask():
+                logger.info("Starting Flask web server on :5000...")
+                try:
+                    serve(flask_app, host='0.0.0.0', port=5000, _quiet=True)
+                except Exception as e:
+                    logger.error(f"Flask server error: {e}", exc_info=True)
+            
+            flask_thread = threading.Thread(target=run_flask, daemon=True)
+            flask_thread.start()
+            logger.info("Flask thread started (daemon)")
+            
+            # Give Flask 1 second to start before polling
             try:
-                serve(flask_app, host='0.0.0.0', port=5000, _quiet=True)
-            except Exception as e:
-                logger.error(f"Flask server error: {e}", exc_info=True)
-        
-        flask_thread = threading.Thread(target=run_flask, daemon=False)
-        flask_thread.start()
-        logger.info("Flask thread started")
-        
-        # Give Flask 1 second to start before polling
-        time.sleep(1)
-        
-    except ImportError:
-        logger.warning("Flask or waitress not installed - QR attendance disabled")
-    except Exception as e:
-        logger.error(f"Error starting Flask: {e}", exc_info=True)
-        logger.warning("Continuing bot without Flask web server")
+                time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Flask startup interrupted")
+            
+        except ImportError:
+            logger.warning("Flask or waitress not installed - QR attendance disabled")
+        except Exception as e:
+            logger.error(f"Error starting Flask: {e}", exc_info=True)
+            logger.warning("Continuing bot without Flask web server")
+    else:
+        logger.info("Skipping Flask web server (SKIP_FLASK=1)")
     
     logger.info("Bot starting...")
     logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
     try:
         application.run_polling(
             allowed_updates=['message', 'callback_query'],
-            stop_signals=(),  # disable SIGTERM/SIGINT-based auto-stop
+            drop_pending_updates=True
         )
     except Exception as e:
         logger.error(f"Polling error: {e}", exc_info=True)

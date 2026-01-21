@@ -89,7 +89,10 @@ def schedule_followups(application, chat_id, event_key, context_vars=None):
     if not seq:
         return
     for idx, step in enumerate(seq):
-        delay = int(step.get('delay_hours', 0) * 3600)
+        # Allow caller to add an override delay (in hours) via context_vars
+        base_delay_hours = int(step.get('delay_hours', 0) or 0)
+        override_hours = int((context_vars or {}).get('delay_hours', 0) or 0)
+        delay = int((base_delay_hours + override_hours) * 3600)
         tpl = step.get('template')
         if tpl not in event_registry.EVENT_KEYS:
             continue

@@ -2,7 +2,9 @@ python-telegram-bot==21.1
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 APScheduler==3.10.4
-python-telegram-bot-calendar==1.0.5Flask==3.0.0
+python-telegram-bot-calendar==1.0.5
+Flask==3.0.0
 waitress==2.1.2
 qrcode[pil]==7.4.2
 reportlab==4.0.7
+openpyxl==3.1.2

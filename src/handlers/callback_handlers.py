@@ -335,10 +335,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     )
     from src.handlers.role_keyboard_handlers import show_role_menu
     from src.handlers.role_keyboard_handlers import show_manage_staff_submenu, show_manage_admins_submenu
-    from src.handlers.invoice_handlers import cmd_create_invoice_start, inv_review_actions
-    from src.handlers.invoice_handlers import inv_search_user_prompt, inv_search_query_handler, inv_select_user
+    from src.handlers.admin_gst_store_handlers import (
+        cmd_gst_settings, gst_toggle, gst_change_mode, gst_edit_percent_prompt,
+        cmd_create_store_items, store_create_item_prompt, store_bulk_upload_prompt,
+        store_item_select_callback, search_store_items
+    )
     
     query = update.callback_query
+    logger.info(f"[CALLBACK_DEBUG] received callback_data={query.data} from user={query.from_user.id}")
     logger.info(f"[CALLBACK] handle_callback_query received: {query.data} from user {query.from_user.id} - Chat ID: {query.message.chat_id if query.message else 'NO MESSAGE'}")
     
     # Try to answer callback, but handle old/expired queries gracefully
@@ -415,18 +419,54 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_pending_attendance(update, context)
     elif query.data == "cmd_pending_shakes":
         await cmd_pending_shakes(update, context)
+    elif query.data == "cmd_reports_menu":
+        # Route to analytics dashboard
+        await cmd_admin_dashboard(update, context)
+    # NOTE: cmd_invoices is handled by Invoice v2 ConversationHandler (not here)
+    elif query.data == "cmd_manage_store":
+        await cmd_manage_store(update, context)
+    elif query.data == "ar_record_payment":
+        # Accounts receivable - record payment
+        from src.handlers.ar_handlers import ar_start_record
+        await ar_start_record(update, context)
+    elif query.data == "ar_credit_summary":
+        # Accounts receivable - credit summary
+        await query.answer()
+        await query.message.reply_text(
+            "📊 *Credit Summary Report*\n\n"
+            "Feature coming soon. Check AR handlers.",
+            parse_mode="Markdown"
+        )
+    elif query.data == "ar_export_overdue":
+        # Accounts receivable - export overdue
+        await query.answer()
+        await query.message.reply_text(
+            "📤 *Export Overdue*\n\n"
+            "Feature coming soon. Check AR handlers.",
+            parse_mode="Markdown"
+        )
     elif query.data == "cmd_admin_dashboard":
         await cmd_admin_dashboard(update, context)
+    elif query.data == "cmd_gst_settings":
+        await cmd_gst_settings(update, context)
+    elif query.data in ("gst_toggle_on","gst_toggle_off"):
+        await gst_toggle(update, context)
+    elif query.data == "gst_change_mode":
+        await gst_change_mode(update, context)
+    elif query.data == "gst_edit_percent":
+        await gst_edit_percent_prompt(update, context)
+    elif query.data == "cmd_create_store_items":
+        await cmd_create_store_items(update, context)
+    elif query.data == "store_create_item":
+        await store_create_item_prompt(update, context)
+    elif query.data == "store_bulk_upload":
+        await store_bulk_upload_prompt(update, context)
+    elif query.data.startswith("store_select_"):
+        await store_item_select_callback(update, context)
     elif query.data == "admin_manage_staff":
         await show_manage_staff_submenu(update, context)
     elif query.data == "admin_manage_admins":
         await show_manage_admins_submenu(update, context)
-    elif query.data == "cmd_invoices":
-        await cmd_create_invoice_start(update, context)
-    elif query.data == "inv_search_user":
-        await inv_search_user_prompt(update, context)
-    elif query.data.startswith("inv_select_"):
-        await inv_select_user(update, context)
     elif query.data == "cmd_add_staff":
         await cmd_add_staff(update, context)
     elif query.data == "cmd_remove_staff":
@@ -444,9 +484,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_admin_back":
         # Back to admin main menu
         await show_role_menu(update, context)
-    elif query.data == "inv_add_another" or query.data == "inv_send" or query.data == "inv_cancel":
-        # Invoice review actions
-        await inv_review_actions(update, context)
     elif query.data == "admin_delete_user":
         await cmd_delete_user(update, context)
     elif query.data == "admin_ban_user":

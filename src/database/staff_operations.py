@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict
 from src.database.connection import execute_query
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,9 @@ def _ensure_table():
         logger.error(f"Failed to ensure staff_members table: {e}")
 
 
-_ensure_table()
+# Create table only when not explicitly skipping DB migrations (useful for local debugging)
+if os.environ.get('SKIP_DB_MIGRATIONS') != '1':
+    _ensure_table()
 
 
 def add_staff(staff_id: int, added_by: int) -> bool:
