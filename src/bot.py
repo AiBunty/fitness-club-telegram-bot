@@ -453,28 +453,33 @@ def main():
     
     # ==================== CRITICAL: CONVERSATION HANDLERS FIRST ====================
     # ALL ConversationHandlers MUST be at the TOP to prevent generic callback interception
-    # Order: User Management → Registration → Invoice → AR → Subscriptions → Store
+    # MAXIMUM PRIORITY: User Management MUST be FIRST (before even Invoice)
+    # Order: User Management (HIGHEST) → Registration → Invoice → AR → Subscriptions → Store (LOWEST)
     
-    logger.info("[BOT] Registering ConversationHandlers (PRIORITY ORDER)")
+    logger.info("[BOT] Registering ConversationHandlers (STRICT PRIORITY ORDER)")
     
-    # User Management Conversation (HIGHEST PRIORITY - manages callbacks like manage_*)
+    # ⭐ HIGHEST PRIORITY: User Management (BEFORE everything else)
+    # Ensures admin User ID entry is NEVER intercepted by Invoice or other flows
+    logger.info("[BOT] ⭐ Registering User Management handlers (PRIORITY 1/7)")
     application.add_handler(get_manage_users_conversation_handler())
     application.add_handler(get_template_conversation_handler())
     application.add_handler(get_followup_conversation_handler())
-    logger.info("[BOT] ✅ User Management handlers registered")
+    logger.info("[BOT] ✅ User Management handlers registered (HIGHEST PRIORITY)")
     
-    # Registration and Approval Conversations
+    # Registration and Approval Conversations (PRIORITY 2)
+    logger.info("[BOT] Registering Registration handlers (PRIORITY 2/7)")
     application.add_handler(get_subscription_conversation_handler())
     application.add_handler(get_admin_approval_conversation_handler())
     logger.info("[BOT] ✅ Registration handlers registered")
     
-    # Invoice v2 (re-enabled with lazy PDF import)
-    # CRITICAL: Registered BEFORE GST/Store to ensure callback priority (cmd_invoices, inv2_*)
+    # Invoice v2 (PRIORITY 3 - after management to prevent User ID interception)
+    # CRITICAL: Registered AFTER Management, BEFORE GST/Store to ensure callback priority
+    logger.info("[BOT] Registering Invoice v2 handlers (PRIORITY 3/7)")
     from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
     application.add_handler(get_invoice_v2_handler())
     application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
-    logger.info("[BOT] ✅ Invoice v2 handlers registered (BEFORE GST/Store)")
+    logger.info("[BOT] ✅ Invoice v2 handlers registered (AFTER Management, BEFORE Store)")
     
     # Accounts Receivable (split-payment) conversation
     application.add_handler(get_ar_conversation_handler())

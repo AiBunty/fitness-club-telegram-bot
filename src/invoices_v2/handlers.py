@@ -93,6 +93,11 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"[INVOICE_V2] clearing_zombie_states keys={list(context.user_data.keys())}")
         context.user_data.clear()
     
+    # CRITICAL: Mark as invoice flow (and remove management flag if set)
+    context.user_data["invoice_v2_data"] = {
+        "is_in_management_flow": False  # Explicitly mark NOT in management flow
+    }
+    
     logger.info(f"[INVOICE_V2] entry_point_success admin={admin_id}")
     
     # Initialize invoice state
@@ -768,6 +773,21 @@ Actions:
 def get_invoice_v2_handler():
     """Create and return invoice v2 conversation handler"""
     logger.info("[INVOICE_V2] Registering Invoice v2 ConversationHandler with entry pattern ^cmd_invoices$")
+    
+    async def invoice_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Guard to ensure Invoice is not intercepting Management flows"""
+        # CRITICAL: If user is in management flow, REJECT this message
+        if context.user_data.get("is_in_management_flow"):
+            logger.warning(f"[INVOICE_V2] Message received but user is in MANAGEMENT flow - rejecting")
+            return False  # Tell ConversationHandler to skip this
+        
+        # Check if we have active invoice state
+        if not context.user_data.get("invoice_v2_data"):
+            logger.warning(f"[INVOICE_V2] Text received but no invoice_v2_data in context - may be stale")
+            # Still return True to let handler process, but log warning
+        
+        return True  # Allow handler to proceed
+    
     return ConversationHandler(
         entry_points=[
             CallbackQueryHandler(cmd_invoices_v2, pattern="^cmd_invoices$"),
@@ -815,8 +835,9 @@ def get_invoice_v2_handler():
         fallbacks=[
             CallbackQueryHandler(handle_cancel, pattern="^inv2_cancel$"),
         ],
-        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        conversation_timeout=300,  # 5 minute timeout (MORE AGGRESSIVE) to prevent stuck states
         per_message=False,
         per_chat=True,  # CRITICAL: Isolate conversations per chat for 200+ users
         per_user=True,  # CRITICAL: Isolate conversations per user
+        name="invoice_v2_conversation"  # Explicit name for debugging
     )

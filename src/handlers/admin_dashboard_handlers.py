@@ -381,7 +381,7 @@ async def cmd_member_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Select user for management operations"""
+    """Select user for management operations - HIGHEST PRIORITY state"""
     query = update.callback_query
     
     if not is_admin(query.from_user.id):
@@ -390,11 +390,16 @@ async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
     
-    # CRITICAL: Clear any active conversation states to prevent cross-talk
-    # Prevents Store Item names or other flows from being treated as User IDs
+    # CRITICAL: GLOBAL STATE RESET - Clear ALL active conversation states
+    # Prevents Invoice v2, Store, AR, or any other flows from intercepting User ID input
+    # This is HIGHEST PRIORITY: Admin Management must take precedence over all other flows
+    logger.info(f"[MANAGE_USERS] GLOBAL STATE RESET for admin {query.from_user.id}")
     if context.user_data:
-        logger.info(f"[MANAGE_USERS] Clearing active states before entry: {list(context.user_data.keys())}")
+        logger.info(f"[MANAGE_USERS] Clearing all active states: {list(context.user_data.keys())}")
         context.user_data.clear()
+    
+    # CRITICAL: Explicitly set management marker to prevent state confusion
+    context.user_data["is_in_management_flow"] = True
     
     keyboard = [
         [InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")]
@@ -414,9 +419,16 @@ async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user ID input for management"""
+    """Handle user ID input for management - GUARDED state"""
+    # CRITICAL: Verify we are in management flow (guard against Invoice/Store/AR interception)
+    if not context.user_data.get("is_in_management_flow"):
+        logger.warning(f"[MANAGE_USERS] User ID input received but not in management flow - rejecting")
+        await update.message.reply_text("❌ Invalid context. Please use /menu to start over.")
+        return ConversationHandler.END
+    
     # CRITICAL FIX: Sanitize input with int(str().strip()) to ensure proper type handling
-    input_text = str(update.message.text).strip()
+    # Remove ALL whitespace: leading, trailing, and internal
+    input_text = str(update.message.text).strip().replace(" ", "")
     
     # Validate input is numeric BEFORE attempting int conversion
     if not input_text.isdigit():
@@ -434,6 +446,10 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
     
     try:
         # CRITICAL FIX: Use int(str().strip()) for proper type conversion (Telegram IDs are 64-bit BIGINT)
+        # Double-check it's still numeric after cleaning
+        if not input_text.isdigit():
+            raise ValueError(f"Invalid characters in cleaned input: {input_text}")
+        
         user_id = int(input_text)
         
         # Validate range (Telegram IDs are positive and reasonably large)
@@ -460,7 +476,13 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return MANAGE_USER_MENU
     
-    logger.info(f"[MANAGE_USERS] Admin {update.effective_user.id} looking up user_id={user_id}")
+    # CRITICAL: Ensure we're still in management flow before proceeding
+    # (Prevents timeout or state confusion from breaking validation)
+    if not context.user_data.get("is_in_management_flow"):
+        logger.warning(f"[MANAGE_USERS] User ID {user_id} entered, but flow state lost")
+        return ConversationHandler.END
+    
+    logger.info(f"[MANAGE_USERS] Admin {update.effective_user.id} looking up user_id={user_id} (flow confirmed)")
     
     # Get user details from database
     user = get_user(user_id)
