@@ -76,15 +76,24 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     admin_id = query.from_user.id if query else update.effective_user.id
     
+    # CRITICAL: Answer callback immediately to stop Telegram loading spinner
+    if query:
+        await query.answer()
+        logger.info(f"[INVOICE_V2] entry_point callback_received admin={admin_id} callback_data={query.data}")
+    else:
+        logger.info(f"[INVOICE_V2] entry_point command_received admin={admin_id}")
+    
     if not is_admin(admin_id):
         await update.effective_user.send_message("❌ Admin access required")
         return ConversationHandler.END
     
-    logger.info(f"[INVOICE_V2] entry_point admin={admin_id}")
+    # CRITICAL: Clear ALL previous states to prevent cross-talk
+    # This prevents abandoned Store/User/AR flows from interfering
+    if context.user_data:
+        logger.info(f"[INVOICE_V2] clearing_zombie_states keys={list(context.user_data.keys())}")
+        context.user_data.clear()
     
-    # Clear any previous state
-    context.user_data.pop("invoice_v2_state", None)
-    context.user_data.pop("invoice_v2_data", None)
+    logger.info(f"[INVOICE_V2] entry_point_success admin={admin_id}")
     
     # Initialize invoice state
     context.user_data["invoice_v2_data"] = {
@@ -758,6 +767,7 @@ Actions:
 
 def get_invoice_v2_handler():
     """Create and return invoice v2 conversation handler"""
+    logger.info("[INVOICE_V2] Registering Invoice v2 ConversationHandler with entry pattern ^cmd_invoices$")
     return ConversationHandler(
         entry_points=[
             CallbackQueryHandler(cmd_invoices_v2, pattern="^cmd_invoices$"),
@@ -807,4 +817,6 @@ def get_invoice_v2_handler():
         ],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
         per_message=False,
+        per_chat=True,  # CRITICAL: Isolate conversations per chat for 200+ users
+        per_user=True,  # CRITICAL: Isolate conversations per user
     )

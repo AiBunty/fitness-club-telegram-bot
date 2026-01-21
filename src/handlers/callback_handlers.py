@@ -423,6 +423,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         # Route to analytics dashboard
         await cmd_admin_dashboard(update, context)
     # NOTE: cmd_invoices is handled by Invoice v2 ConversationHandler (not here)
+    # CRITICAL FALLBACK: If invoice callback reaches here, log error for diagnosis
+    elif query.data.startswith("cmd_invoices") or query.data.startswith("inv2_"):
+        logger.error(f"[CALLBACK_FALLBACK] Invoice callback reached generic handler! callback_data={query.data} user={query.from_user.id}")
+        logger.error(f"[CALLBACK_FALLBACK] This indicates ConversationHandler failed to catch it - check handler registration order!")
+        await query.answer("⚠️ Processing invoice request...")
+        return
     elif query.data == "cmd_manage_store":
         await cmd_manage_store(update, context)
     elif query.data == "ar_record_payment":

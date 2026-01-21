@@ -500,11 +500,14 @@ def main():
     application.add_handler(get_ar_conversation_handler())
     
     # Invoice v2 (re-enabled with lazy PDF import)
+    # CRITICAL: Registered BEFORE GST/Store to ensure callback priority
     from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
+    logger.info("[BOT] Registering Invoice v2 handler (BEFORE GST/Store)")
     application.add_handler(get_invoice_v2_handler())
     # User action callbacks (pay/reject)
     application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
+    logger.info("[BOT] Invoice v2 handlers registered successfully")
     
     # GST & Store items handlers
     from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
