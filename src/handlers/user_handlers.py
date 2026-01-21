@@ -524,22 +524,44 @@ async def get_profile_pic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error sending profile notification to admins: {e}")
         
+        # Clear conversation data after successful registration
+        context.user_data.clear()
+        
         # End registration conversation - user will use /subscribe command
         # Admin approval will happen after subscription and payment is complete
         return ConversationHandler.END
 
     except Exception as e:
         logger.error(f"Registration failed for user {user_id}: {e}")
+        
+        # Critical: Clear user data to prevent state trap
+        context.user_data.clear()
+        
         await update.message.reply_text(
             "❌ Registration failed. Please tap /start to try again.\n"
             "If it keeps failing, share this with admin so we can fix it."
         )
-        context.user_data.clear()
         return ConversationHandler.END
 
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Registration cancelled.")
     context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def registration_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle registration timeout - prevents users from getting stuck"""
+    logger.warning(f"Registration timeout for user {update.effective_user.id if update.effective_user else 'unknown'}")
+    
+    # Clear any stuck data
+    context.user_data.clear()
+    
+    if update.message:
+        await update.message.reply_text(
+            "⏱️ Registration timed out.\n\n"
+            "No worries! Use /start to begin again when you're ready.",
+            parse_mode='Markdown'
+        )
     return ConversationHandler.END
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

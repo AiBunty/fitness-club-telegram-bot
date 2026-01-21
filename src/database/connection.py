@@ -19,19 +19,18 @@ class DatabaseConnectionPool:
     
     def get_pool(self):
         if self._pool is None or self._pool.closed:
-            # Create pool with min 2 connections, max 20 connections
-            # Faster initialization on first load
-            # minconn=2 means only 2 connections initialized upfront instead of 5
+            # Create pool with min 5 connections, max 50 connections
+            # Supports 200+ concurrent users with safety margin
             db_config = dict(DATABASE_CONFIG)
             # Add connection timeout
             db_config['connect_timeout'] = 10
             logger.info(f"[DB] Attempting connection to {db_config.get('host')}:{db_config.get('port')}...")
             self._pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=2,
-                maxconn=20,
+                minconn=5,
+                maxconn=50,
                 **db_config
             )
-            logger.info("Database connection pool created (2-20 connections)")
+            logger.info("Database connection pool created (5-50 connections)")
         return self._pool
     
     def close_pool(self):
@@ -96,8 +95,10 @@ def get_db_cursor(commit=True):
         except Exception as put_exc:
             logger.debug(f"Error returning connection to pool: {put_exc}")
 
-def execute_query(query: str, params: tuple = None, fetch_one: bool = False):
-    """Execute a query using connection pool - supports concurrent users"""
+def execute_query(query: str, params: tuple = None, fetch_one: bool = False, retry_count: int = 0):
+    """Execute a query using connection pool - supports concurrent users with auto-retry on connection errors"""
+    max_retries = 2
+    
     try:
         with get_db_cursor() as cursor:
             cursor.execute(query, params or ())
@@ -110,22 +111,69 @@ def execute_query(query: str, params: tuple = None, fetch_one: bool = False):
                 return [dict(row) for row in results] if results else []
             return cursor.rowcount
     except (InterfaceError, OperationalError) as e:
-        logger.error(f"Query failed: {e}")
+        error_msg = str(e)
+        logger.error(f"Query failed: {error_msg}")
+        
+        # Retry on SSL/connection errors
+        if retry_count < max_retries and ('SSL' in error_msg or 'closed unexpectedly' in error_msg or 'connection' in error_msg.lower()):
+            logger.warning(f"Connection error detected, retrying... (attempt {retry_count + 1}/{max_retries})")
+            # Force recreate the connection pool
+            pool_manager = DatabaseConnectionPool()
+            if pool_manager._pool:
+                try:
+                    pool_manager._pool.closeall()
+                except:
+                    pass
+                pool_manager._pool = None
+            
+            # Retry the query
+            return execute_query(query, params, fetch_one, retry_count + 1)
+        
         raise
     except Exception as e:
         logger.error(f"Unexpected database error: {e}")
         raise
 
 def get_connection():
-    """Get database connection (for backward compatibility)"""
-    db = DatabaseConnection()
-    return db.get_connection()
+    """Get database connection from pool (for backward compatibility)
+    
+    IMPORTANT: Always call release_connection(conn) when done!
+    """
+    pool_manager = DatabaseConnectionPool()
+    pool = pool_manager.get_pool()
+    return pool.getconn()
+
+
+def release_connection(conn):
+    """Return connection to pool after use
+    
+    Args:
+        conn: Connection object obtained from get_connection()
+    """
+    if conn is None:
+        return
+    
+    pool_manager = DatabaseConnectionPool()
+    pool = pool_manager.get_pool()
+    
+    try:
+        # Check if connection is still valid
+        if getattr(conn, "closed", 1) == 0:
+            pool.putconn(conn)
+            logger.debug("Connection returned to pool")
+        else:
+            # Connection is closed, remove from pool
+            pool.putconn(conn, close=True)
+            logger.warning("Closed connection removed from pool")
+    except Exception as e:
+        logger.error(f"Error returning connection to pool: {e}")
 
 
 def get_db_connection():
     """Compatibility shim for older tests/modules expecting `get_db_connection`.
 
     Delegates to `get_connection()` to preserve existing pool behaviour.
+    IMPORTANT: Always call release_connection(conn) when done!
     """
     return get_connection()
 

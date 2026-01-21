@@ -7,6 +7,7 @@ Broadcast messaging system for admin
 """
 
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
@@ -219,6 +220,9 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """,
                 (user['user_id'], message_template, broadcast_type)
             )
+            
+            # Rate limiting: 0.05s delay = max 20 msg/sec (safe under Telegram's 30/sec limit)
+            await asyncio.sleep(0.05)
             
         except Exception as e:
             logger.error(f"Failed to send to {user['user_id']}: {e}")

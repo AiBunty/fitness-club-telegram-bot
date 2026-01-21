@@ -1,5 +1,6 @@
 from datetime import time as dt_time
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 import os
 import asyncio
@@ -21,7 +22,7 @@ from src.config import TELEGRAM_BOT_TOKEN
 from src.database.connection import test_connection
 from src.handlers.user_handlers import (
     start_command, begin_registration, get_name, get_phone, get_age, 
-    get_weight, get_gender, get_profile_pic, cancel_registration,
+    get_weight, get_gender, get_profile_pic, cancel_registration, registration_timeout,
     menu_command, cmd_qrcode, NAME, PHONE, AGE, WEIGHT, GENDER, PROFILE_PIC,
     handle_location_for_checkin, handle_greeting
 )
@@ -133,14 +134,23 @@ from src.utils.subscription_scheduler import (
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
 
-# Configure logging
+# Configure logging with rotating file handler to prevent disk space issues
+# Max 10MB per file, keep 5 backup files = max 60MB total
+file_handler = RotatingFileHandler(
+    'logs/fitness_bot.log',
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[
-        logging.FileHandler('logs/fitness_bot.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[file_handler, console_handler]
 )
 
 logger = logging.getLogger(__name__)
@@ -353,7 +363,9 @@ def main():
             GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
             PROFILE_PIC: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), get_profile_pic)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_registration)]
+        fallbacks=[CommandHandler('cancel', cancel_registration)],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        name="registration_conversation"
     )
     
     application.add_handler(CommandHandler('start', start_command))
@@ -771,13 +783,23 @@ def main():
     
     # Add global error handler for unhandled exceptions
     async def error_handler(update, context):
-        """Log errors and ignore BadRequest errors from expired queries"""
+        """Log errors, handle RetryAfter, and ignore BadRequest from expired queries"""
         if context.error is None:
             return
+        
+        # Handle Telegram rate limiting
+        from telegram.error import RetryAfter
+        if isinstance(context.error, RetryAfter):
+            retry_after = context.error.retry_after
+            logger.warning(f"Rate limit hit. Retry after {retry_after} seconds")
+            await asyncio.sleep(retry_after)
+            return
+        
         # Ignore BadRequest errors from expired callback queries
         if "BadRequest" in str(type(context.error).__name__):
             logger.debug(f"Ignoring BadRequest error (likely expired query): {context.error}")
             return
+        
         logger.error(f"An error occurred: {context.error}", exc_info=context.error)
     
     application.add_error_handler(error_handler)

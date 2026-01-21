@@ -1,15 +1,13 @@
 import qrcode
 import io
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
-def generate_gym_qr_code(user_id: int, full_name: str, phone: str) -> io.BytesIO:
-    """
-    Generate a QR code for gym login verification.
-    Format: user_id|full_name|phone (can be scanned by staff)
-    """
+def _generate_gym_qr_code_sync(user_id: int, full_name: str, phone: str) -> io.BytesIO:
+    """Synchronous QR code generation (CPU-intensive)"""
     try:
         data = f"{user_id}|{full_name}|{phone}"
         qr = qrcode.QRCode(
@@ -34,13 +32,23 @@ def generate_gym_qr_code(user_id: int, full_name: str, phone: str) -> io.BytesIO
         return None
 
 
+async def generate_gym_qr_code(user_id: int, full_name: str, phone: str) -> io.BytesIO:
+    """
+    Generate a QR code for gym login verification (async).
+    Format: user_id|full_name|phone (can be scanned by staff)
+    
+    Runs in separate thread to prevent blocking the event loop.
+    """
+    return await asyncio.to_thread(_generate_gym_qr_code_sync, user_id, full_name, phone)
+
+
 def generate_qr_data_string(user_id: int, full_name: str, phone: str) -> str:
     """Return the data string embedded in QR code."""
     return f"{user_id}|{full_name}|{phone}"
 
 
-def generate_bot_link_qr(bot_username: str, payload: str = "studio_checkin", out_path: str | None = None) -> io.BytesIO:
-    """Generate a QR that opens the bot with a start payload for studio check-in."""
+def _generate_bot_link_qr_sync(bot_username: str, payload: str = "studio_checkin", out_path: str | None = None) -> io.BytesIO:
+    """Generate a QR that opens the bot with a start payload for studio check-in (synchronous)."""
     try:
         link = f"https://t.me/{bot_username}?start={payload}"
         qr = qrcode.QRCode(
@@ -63,3 +71,8 @@ def generate_bot_link_qr(bot_username: str, payload: str = "studio_checkin", out
     except Exception as e:
         logger.error(f"Failed to generate bot link QR: {e}")
         return None
+
+
+async def generate_bot_link_qr(bot_username: str, payload: str = "studio_checkin", out_path: str | None = None) -> io.BytesIO:
+    """Generate a QR that opens the bot with a start payload (async)."""
+    return await asyncio.to_thread(_generate_bot_link_qr_sync, bot_username, payload, out_path)
