@@ -20,10 +20,10 @@ def get_active_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     
     try:
         cur = conn.cursor()
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 user_id,
-                telegram_id,
                 full_name,
                 telegram_username,
                 phone,
@@ -48,15 +48,14 @@ def get_active_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
         for row in rows:
             members.append({
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'phone': row[4],
-                'fee_paid_date': row[5],
-                'fee_expiry_date': row[6],
-                'fee_status': row[7],
-                'total_points': row[8],
-                'created_at': row[9]
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'phone': row[3],
+                'fee_paid_date': row[4],
+                'fee_expiry_date': row[5],
+                'fee_status': row[6],
+                'total_points': row[7],
+                'created_at': row[8]
             })
         
         cur.close()
@@ -65,6 +64,11 @@ def get_active_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching active members: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -78,10 +82,10 @@ def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     
     try:
         cur = conn.cursor()
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 user_id,
-                telegram_id,
                 full_name,
                 telegram_username,
                 phone,
@@ -107,15 +111,14 @@ def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
         for row in rows:
             members.append({
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'phone': row[4],
-                'fee_paid_date': row[5],
-                'fee_expiry_date': row[6],
-                'fee_status': row[7],
-                'total_points': row[8],
-                'created_at': row[9]
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'phone': row[3],
+                'fee_paid_date': row[4],
+                'fee_expiry_date': row[5],
+                'fee_status': row[6],
+                'total_points': row[7],
+                'created_at': row[8]
             })
         
         cur.close()
@@ -124,6 +127,11 @@ def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching inactive members: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
@@ -136,10 +144,10 @@ def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
     
     try:
         cur = conn.cursor()
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 user_id,
-                telegram_id,
                 full_name,
                 telegram_username,
                 phone,
@@ -161,15 +169,14 @@ def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
         for row in rows:
             members.append({
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'phone': row[4],
-                'fee_paid_date': row[5],
-                'fee_expiry_date': row[6],
-                'fee_status': row[7],
-                'total_points': row[8],
-                'days_remaining': (row[6] - datetime.now().date()).days if row[6] else None
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'phone': row[3],
+                'fee_paid_date': row[4],
+                'fee_expiry_date': row[5],
+                'fee_status': row[6],
+                'total_points': row[7],
+                'days_remaining': (row[5] - datetime.now().date()).days if row[5] else None
             })
         
         cur.close()
@@ -178,6 +185,11 @@ def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching expiring members: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -198,10 +210,10 @@ def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str,
         cur = conn.cursor()
         
         # Get all users with their activity data for the day
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 u.user_id,
-                u.telegram_id,
                 u.full_name,
                 u.telegram_username,
                 u.fee_status,
@@ -252,18 +264,17 @@ def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str,
         for row in rows:
             activity = {
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'fee_status': row[4],
-                'attendance_count': row[5],
-                'weight_logs': row[6],
-                'water_cups': row[7],
-                'meal_logs': row[8],
-                'habits_completed': row[9],
-                'shake_orders': row[10],
-                'total_points': row[11],
-                'activity_score': row[5] + row[6] + (1 if row[7] > 0 else 0) + row[8] + row[9]
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'fee_status': row[3],
+                'attendance_count': row[4],
+                'weight_logs': row[5],
+                'water_cups': row[6],
+                'meal_logs': row[7],
+                'habits_completed': row[8],
+                'shake_orders': row[9],
+                'total_points': row[10],
+                'activity_score': row[4] + row[5] + (1 if row[6] > 0 else 0) + row[7] + row[8]
             }
             activities.append(activity)
         
@@ -273,6 +284,11 @@ def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str,
     except Exception as e:
         logger.error(f"Error fetching member daily activity: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
@@ -288,10 +304,10 @@ def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         
         start_date = datetime.now().date() - timedelta(days=days)
         
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 u.user_id,
-                u.telegram_id,
                 u.full_name,
                 u.telegram_username,
                 u.total_points,
@@ -322,7 +338,7 @@ def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
                 AND DATE(hl.logged_at) >= %s 
                 AND hl.completed = true
             
-            GROUP BY u.user_id, u.telegram_id, u.full_name, u.telegram_username, u.total_points
+            GROUP BY u.user_id, u.full_name, u.telegram_username, u.total_points
             ORDER BY total_activity_days DESC, u.total_points DESC
             LIMIT %s
         """
@@ -334,16 +350,15 @@ def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         for row in rows:
             performers.append({
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'total_points': row[4],
-                'attendance_days': row[5],
-                'weight_log_days': row[6],
-                'water_log_days': row[7],
-                'meal_log_days': row[8],
-                'habit_log_days': row[9],
-                'total_activity_days': row[10]
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'total_points': row[3],
+                'attendance_days': row[4],
+                'weight_log_days': row[5],
+                'water_log_days': row[6],
+                'meal_log_days': row[7],
+                'habit_log_days': row[8],
+                'total_activity_days': row[9]
             })
         
         cur.close()
@@ -352,6 +367,11 @@ def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching top performers: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
@@ -367,10 +387,10 @@ def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         
         start_date = datetime.now().date() - timedelta(days=days)
         
+        # FIX: Removed non-existent telegram_id column
         query = """
             SELECT 
                 u.user_id,
-                u.telegram_id,
                 u.full_name,
                 u.telegram_username,
                 u.fee_status,
@@ -386,7 +406,7 @@ def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
             LEFT JOIN meal_logs ml ON u.user_id = ml.user_id
             LEFT JOIN habit_logs hl ON u.user_id = hl.user_id
             
-            GROUP BY u.user_id, u.telegram_id, u.full_name, u.telegram_username, 
+            GROUP BY u.user_id, u.full_name, u.telegram_username, 
                      u.fee_status, u.total_points, u.created_at
             
             HAVING COALESCE(MAX(GREATEST(
@@ -406,15 +426,14 @@ def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         
         inactive = []
         for row in rows:
-            days_inactive = (datetime.now() - row[6]).days if row[6] else 0
+            days_inactive = (datetime.now() - row[5]).days if row[5] else 0
             inactive.append({
                 'user_id': row[0],
-                'telegram_id': row[1],
-                'full_name': row[2],
-                'telegram_username': row[3],
-                'fee_status': row[4],
-                'total_points': row[5],
-                'last_activity': row[6],
+                'full_name': row[1],
+                'telegram_username': row[2],
+                'fee_status': row[3],
+                'total_points': row[4],
+                'last_activity': row[5],
                 'days_inactive': days_inactive
             })
         
@@ -424,6 +443,11 @@ def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching inactive users: {e}")
         return []
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def move_expired_to_inactive() -> int:
@@ -440,13 +464,14 @@ def move_expired_to_inactive() -> int:
         
         grace_period_date = datetime.now().date() - timedelta(days=7)
         
+        # FIX: Removed non-existent telegram_id column
         query = """
             UPDATE users
             SET fee_status = 'expired'
             WHERE fee_status IN ('paid', 'active')
               AND fee_expiry_date IS NOT NULL
               AND fee_expiry_date < %s
-            RETURNING user_id, telegram_id, full_name, fee_expiry_date
+            RETURNING user_id, full_name, fee_expiry_date
         """
         
         cur.execute(query, (grace_period_date,))
@@ -456,7 +481,7 @@ def move_expired_to_inactive() -> int:
         logger.info(f"Moved {len(moved)} members to inactive status")
         
         for member in moved:
-            logger.info(f"Expired: {member[2]} (ID: {member[0]}) - Expired on {member[3]}")
+            logger.info(f"Expired: {member[1]} (ID: {member[0]}) - Expired on {member[2]}")
         
         cur.close()
         return len(moved)
@@ -466,6 +491,11 @@ def move_expired_to_inactive() -> int:
         if conn:
             conn.rollback()
         return 0
+    finally:
+        # FIX: Ensure connection is returned to the pool for scalability
+        if conn:
+            from src.database.connection import DatabaseConnectionPool
+            DatabaseConnectionPool().get_pool().putconn(conn)
 
 
 def get_membership_stats() -> Dict[str, Any]:

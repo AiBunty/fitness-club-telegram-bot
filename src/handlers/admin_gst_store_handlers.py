@@ -223,6 +223,9 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
     
     logger.info(f"[STORE_BULK] upload_received filename={doc.file_name}")
     
+    # Send immediate feedback to admin
+    await update.message.reply_text('⏳ Processing file, please wait...')
+    
     file = await doc.get_file()
     bio = BytesIO()
     await file.download_to_memory(out=bio)
@@ -288,8 +291,8 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
         
     except Exception as e:
         logger.error(f"[STORE_BULK] error parsing excel: {e}")
-        await update.message.reply_text('❌ Failed to parse Excel. Ensure it is a valid .xlsx file with required columns.')
-        return ConversationHandler.END
+        await update.message.reply_text('❌ Failed to parse Excel. Ensure it is a valid .xlsx file with required columns.\n\nPlease upload a valid Excel file or type /cancel to exit.')
+        return BULK_UPLOAD_AWAIT
 
 
 # Store item search API used by invoice flow (DEPRECATED - DO NOT USE)
@@ -352,6 +355,17 @@ async def store_item_select_callback(update: Update, context: ContextTypes.DEFAU
     return
 
 
+async def handle_bulk_upload_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages during bulk upload (user sent text instead of file)"""
+    logger.info(f"[STORE_BULK] received text instead of file: {update.message.text}")
+    await update.message.reply_text(
+        '❌ Please upload a valid Excel file (.xlsx) as a document attachment.\n\n'
+        'Tap the 📎 (attachment) icon and select your Excel file.\n\n'
+        'Or type /cancel to exit.'
+    )
+    return BULK_UPLOAD_AWAIT
+
+
 def get_store_and_gst_handlers():
     from telegram.ext import CallbackQueryHandler
     gst_conv = ConversationHandler(
@@ -375,7 +389,10 @@ def get_store_and_gst_handlers():
             ITEM_HSN: [MessageHandler(filters.TEXT & ~filters.COMMAND, store_item_hsn)],
             ITEM_MRP: [MessageHandler(filters.TEXT & ~filters.COMMAND, store_item_mrp)],
             ITEM_GST: [MessageHandler(filters.TEXT & ~filters.COMMAND, store_item_gst)],
-            BULK_UPLOAD_AWAIT: [MessageHandler(filters.Document.ALL, handle_uploaded_store_excel)]
+            BULK_UPLOAD_AWAIT: [
+                MessageHandler(filters.Document.ALL, handle_uploaded_store_excel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bulk_upload_text)
+            ]
         },
         fallbacks=[],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
