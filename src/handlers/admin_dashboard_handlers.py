@@ -390,10 +390,23 @@ async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.answer()
     
+    # CRITICAL: Clear any active conversation states to prevent cross-talk
+    # Prevents Store Item names or other flows from being treated as User IDs
+    if context.user_data:
+        logger.info(f"[MANAGE_USERS] Clearing active states before entry: {list(context.user_data.keys())}")
+        context.user_data.clear()
+    
+    keyboard = [
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         text="👤 *Manage Users*\n\n"
         "Send the User ID of the member you want to manage:\n\n"
-        "Example: `424837855`",
+        "Example: `424837855`\n\n"
+        "⚠️ Make sure to copy the exact ID (numbers only)",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
     
@@ -402,22 +415,67 @@ async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user ID input for management"""
-    try:
-        user_id = int(update.message.text)
-    except ValueError:
+    # CRITICAL FIX: Strip input to remove leading/trailing spaces
+    input_text = update.message.text.strip()
+    
+    # Validate input is numeric
+    if not input_text.isdigit():
         await update.message.reply_text(
             "❌ Invalid format. Please send a valid User ID (numbers only).\n\n"
-            "Example: `424837855`",
+            "Example: `424837855`\n\n"
+            "💡 Tip: User IDs are numbers. If you're trying to search by name, use the member list instead.\n\n"
+            "Use /cancel or click the button below to exit.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")
+            ]]),
             parse_mode="Markdown"
         )
         return MANAGE_USER_MENU
     
-    # Get user details
+    try:
+        # CRITICAL FIX: Handle as 64-bit integer (Telegram IDs can exceed 32-bit limit)
+        user_id = int(input_text)
+        
+        # Validate range (Telegram IDs are positive and reasonably large)
+        if user_id <= 0:
+            await update.message.reply_text(
+                "❌ Invalid User ID. User IDs must be positive numbers.\n\n"
+                "Example: `424837855`",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")
+                ]]),
+                parse_mode="Markdown"
+            )
+            return MANAGE_USER_MENU
+            
+    except ValueError as e:
+        logger.error(f"[MANAGE_USERS] Failed to parse user ID '{input_text}': {e}")
+        await update.message.reply_text(
+            "❌ Error parsing User ID. The number might be too large or invalid.\n\n"
+            "Please try again or use /cancel to exit.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")
+            ]]),
+            parse_mode="Markdown"
+        )
+        return MANAGE_USER_MENU
+    
+    logger.info(f"[MANAGE_USERS] Admin {update.effective_user.id} looking up user_id={user_id}")
+    
+    # Get user details from database
     user = get_user(user_id)
     if not user:
+        logger.warning(f"[MANAGE_USERS] User ID {user_id} not found in database")
         await update.message.reply_text(
             f"❌ User with ID `{user_id}` not found.\n\n"
-            "Please try again or use /cancel to exit.",
+            "💡 **Possible reasons:**\n"
+            "• User hasn't registered yet\n"
+            "• User ID was typed incorrectly\n"
+            "• User was already deleted\n\n"
+            "Please verify the ID and try again, or use /cancel to exit.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_dashboard_menu")
+            ]]),
             parse_mode="Markdown"
         )
         return MANAGE_USER_MENU
@@ -425,6 +483,8 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
     # Store user_id in context for later use
     context.user_data['selected_user_id'] = user_id
     context.user_data['selected_user'] = user
+    
+    logger.info(f"[MANAGE_USERS] Found user: {user.get('full_name')} (ID: {user_id})")
     
     # Show user details and management options
     is_banned = user.get('is_banned', False)
@@ -446,6 +506,7 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
                               callback_data="manage_toggle_ban")],
         [InlineKeyboardButton("🗑️ Delete User", callback_data="manage_delete_user")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_manage_users_back")]
+    ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     

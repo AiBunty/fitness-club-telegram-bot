@@ -32,6 +32,16 @@ def create_user(user_id: int, username: str, full_name: str,
     return result
 
 def get_user(user_id: int):
+    """Get user by Telegram user ID (64-bit BigInt)
+    
+    Args:
+        user_id: Telegram user ID (can be up to 64-bit integer)
+        
+    Returns:
+        dict: User record or None if not found
+    """
+    # PostgreSQL BIGINT column handles 64-bit integers natively
+    # psycopg2 automatically handles Python int -> PostgreSQL BIGINT conversion
     query = "SELECT * FROM users WHERE user_id = %s"
     return execute_query(query, (user_id,), fetch_one=True)
 
@@ -68,7 +78,21 @@ def get_total_users_count():
     return result['count'] if result else 0
 
 def delete_user(user_id: int):
-    """Delete a user completely from the database"""
+    """Delete a user completely from the database
+    
+    Args:
+        user_id: Telegram user ID (64-bit BigInt)
+        
+    Returns:
+        dict: Deleted user record with full_name, or None if not found
+    """
+    # Validate user_id is a positive integer
+    if not isinstance(user_id, int) or user_id <= 0:
+        logger.error(f"Invalid user_id for deletion: {user_id} (type: {type(user_id)})")
+        return None
+    
+    logger.info(f"[DELETE_USER] Starting deletion for user_id={user_id}")
+    
     # Delete all related records first to avoid foreign key violations
     # Each delete is independent - if a table doesn't exist, we skip it
     
@@ -82,20 +106,25 @@ def delete_user(user_id: int):
         "reminder_preferences"
     ]
     
+    deleted_counts = {}
     for table in tables_to_clean:
         try:
-            execute_query(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
-            logger.debug(f"Deleted records from {table} for user {user_id}")
+            # PostgreSQL handles BIGINT comparison automatically
+            result = execute_query(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
+            deleted_counts[table] = result if isinstance(result, int) else 0
+            logger.debug(f"[DELETE_USER] Deleted {deleted_counts[table]} records from {table} for user {user_id}")
         except Exception as e:
             # Table might not exist or other issue - log and continue
-            logger.debug(f"Skipping {table} for user {user_id}: {e}")
+            logger.debug(f"[DELETE_USER] Skipping {table} for user {user_id}: {e}")
     
     # Finally delete the user
     try:
         query = "DELETE FROM users WHERE user_id = %s RETURNING full_name"
         result = execute_query(query, (user_id,), fetch_one=True)
         if result:
-            logger.info(f"User deleted (with all related records): {user_id} - {result['full_name']}")
+            logger.info(f"[DELETE_USER] User deleted successfully: {user_id} - {result['full_name']} (cleaned {sum(deleted_counts.values())} related records)")
+        else:
+            logger.warning(f"[DELETE_USER] User {user_id} not found in database")
         return result
     except Exception as e:
         logger.error(f"Error deleting user {user_id}: {e}")
