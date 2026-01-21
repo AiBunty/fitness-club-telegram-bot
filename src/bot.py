@@ -231,6 +231,14 @@ async def _set_bot_commands(application: Application) -> None:
         logger.info("Menu button set to show commands")
     except Exception as e:
         logger.warning(f"Could not set menu button: {e}")
+    
+    # Delete any existing webhook to ensure clean polling start
+    # DO NOT drop pending updates here - let run_polling handle it
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=False)
+        logger.info("Webhook deleted successfully")
+    except Exception as e:
+        logger.warning(f"Could not delete webhook: {e}")
 
 
 async def set_commands_for_user(user_id: int, bot) -> None:
@@ -462,7 +470,7 @@ def main():
     application.add_handler(get_followup_conversation_handler())
 
     # DEBUG: log raw incoming updates without blocking conversation handlers
-    application.add_handler(MessageHandler(filters.ALL, raw_update_logger), group=1, block=False)
+    application.add_handler(MessageHandler(filters.ALL, raw_update_logger), group=1)
     
     # Subscription handlers - MUST be BEFORE numeric handlers
     application.add_handler(get_subscription_conversation_handler())
@@ -822,15 +830,30 @@ def main():
         logger.info("Skipping Flask web server (SKIP_FLASK=1)")
     
     logger.info("Bot starting...")
+    logger.info("Bot starting...")
     logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
+    
+    # ================================================================
+    # START POLLING
+    # ================================================================
+    # python-telegram-bot v21 runs polling once and exits cleanly
+    # Use run_bot_forever.py wrapper script for automatic restarts
     try:
+        logger.info("[BOT] Starting polling...")
+        
         application.run_polling(
             allowed_updates=['message', 'callback_query'],
-            drop_pending_updates=True
+            drop_pending_updates=True  # Drop any old updates and force disconnect other instances
         )
+        
+        logger.info("[BOT] Polling completed - bot will restart via wrapper script")
+        
+    except KeyboardInterrupt:
+        logger.info("[BOT] Interrupted by user (Ctrl+C)")
     except Exception as e:
-        logger.error(f"Polling error: {e}", exc_info=True)
-    logger.info("Polling loop exited")
+        logger.error(f"[BOT] Error in polling: {type(e).__name__}: {e}", exc_info=True)
+    finally:
+        logger.info("[BOT] Bot shutdown complete")
 
 if __name__ == '__main__':
     main()
