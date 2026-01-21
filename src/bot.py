@@ -233,10 +233,10 @@ async def _set_bot_commands(application: Application) -> None:
         logger.warning(f"Could not set menu button: {e}")
     
     # Delete any existing webhook to ensure clean polling start
-    # DO NOT drop pending updates here - let run_polling handle it
+    # Drop pending updates here to disconnect any other bot instances
     try:
-        await application.bot.delete_webhook(drop_pending_updates=False)
-        logger.info("Webhook deleted successfully")
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook deleted and pending updates cleared")
     except Exception as e:
         logger.warning(f"Could not delete webhook: {e}")
 
@@ -836,14 +836,28 @@ def main():
     # ================================================================
     # START POLLING
     # ================================================================
-    # python-telegram-bot v21 runs polling once and exits cleanly
-    # Use run_bot_forever.py wrapper script for automatic restarts
+    # Manually control the polling loop to keep bot running
+    import signal
+    import asyncio
+    
+    # Flag to control the polling loop
+    running = True
+    
+    def signal_handler(sig, frame):
+        nonlocal running
+        logger.info("[BOT] Received shutdown signal")
+        running = False
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
         logger.info("[BOT] Starting polling...")
         
+        # Use run_polling which should block indefinitely
         application.run_polling(
             allowed_updates=['message', 'callback_query'],
-            drop_pending_updates=True  # Drop any old updates and force disconnect other instances
+            stop_signals=None  # Don't let PTB handle signals, we'll handle manually
         )
         
         logger.info("[BOT] Polling completed - bot will restart via wrapper script")
