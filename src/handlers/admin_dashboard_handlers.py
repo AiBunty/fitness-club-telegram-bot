@@ -35,6 +35,13 @@ async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Admin access only.")
         return
     
+    # CRITICAL: Clear any active conversation states to prevent cross-talk
+    # This ensures that abandoned Invoice/Store/User searches don't interfere
+    # with new admin actions (e.g., Store Item creation thinking it's User Search)
+    if context.user_data:
+        logger.info(f"[ADMIN_PANEL] Clearing active states: {list(context.user_data.keys())}")
+        context.user_data.clear()
+    
     # Handle both message and callback contexts
     if update.callback_query:
         await update.callback_query.answer()
@@ -272,6 +279,7 @@ def get_template_conversation_handler():
             ]
         },
         fallbacks=[CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$")],
+        conversation_timeout=600,  # 10 minutes timeout
         per_message=False
     )
 
@@ -291,6 +299,7 @@ def get_followup_conversation_handler():
             ]
         },
         fallbacks=[CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$")],
+        conversation_timeout=600,  # 10 minutes timeout
         per_message=False
     )
 
@@ -738,6 +747,12 @@ async def callback_back_to_admin_panel(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer()
     
+    # CRITICAL: Clear any active conversation states when returning to admin panel
+    # Prevents abandoned flows (Invoice, Store, User Search) from persisting
+    if context.user_data:
+        logger.info(f"[ADMIN_PANEL] Returning to dashboard, clearing states: {list(context.user_data.keys())}")
+        context.user_data.clear()
+    
     keyboard = [
         [InlineKeyboardButton("👥 Member List", callback_data="admin_members_list_1"),
          InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
@@ -787,5 +802,6 @@ def get_manage_users_conversation_handler():
             CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$"),
             CommandHandler('cancel', lambda u, c: ConversationHandler.END)
         ],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
         per_message=False
     )

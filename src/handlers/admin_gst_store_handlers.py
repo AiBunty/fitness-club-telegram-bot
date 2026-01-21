@@ -188,14 +188,23 @@ async def store_bulk_upload_prompt(update: Update, context: ContextTypes.DEFAULT
     logger.info("[STORE_BULK] entering bulk upload flow")
     # generate simple sample excel
     try:
+        import asyncio
         from openpyxl import Workbook
-        wb = Workbook()
-        ws = wb.active
-        ws.append(['Item Name','HSN Code','MRP','GST %'])
-        ws.append(['Sample Item','1001', '499.00', '18'])
-        bio = BytesIO()
-        wb.save(bio)
-        bio.seek(0)
+        
+        # Wrap Excel generation in thread to prevent blocking
+        def generate_sample_excel():
+            wb = Workbook()
+            ws = wb.active
+            ws.append(['Item Name','HSN Code','MRP','GST %'])
+            ws.append(['Sample Item','1001', '499.00', '18'])
+            bio = BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            return bio
+        
+        # Run in separate thread to avoid blocking
+        bio = await asyncio.to_thread(generate_sample_excel)
+        
         await query.message.reply_document(document=InputFile(bio, filename='store_items_sample.xlsx'))
         await query.message.reply_text('Upload filled Excel file (as attachment).')
         return BULK_UPLOAD_AWAIT  # Stay in conversation to await document
@@ -220,10 +229,17 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
     bio.seek(0)
     
     try:
+        import asyncio
         from openpyxl import load_workbook
-        wb = load_workbook(filename=bio, data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
+        
+        # Wrap Excel parsing in thread to prevent blocking
+        def parse_excel(bio):
+            wb = load_workbook(filename=bio, data_only=True)
+            ws = wb.active
+            return list(ws.iter_rows(values_only=True))
+        
+        # Run in separate thread
+        rows = await asyncio.to_thread(parse_excel, bio)
         
         if len(rows) < 2:
             await update.message.reply_text('❌ Excel file is empty or has no data rows.')
@@ -344,6 +360,7 @@ def get_store_and_gst_handlers():
             GST_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gst_edit_percent)]
         },
         fallbacks=[],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
         per_message=False
     )
 
@@ -361,6 +378,7 @@ def get_store_and_gst_handlers():
             BULK_UPLOAD_AWAIT: [MessageHandler(filters.Document.ALL, handle_uploaded_store_excel)]
         },
         fallbacks=[],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
         per_message=False
     )
 

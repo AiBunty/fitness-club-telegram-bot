@@ -102,7 +102,16 @@ async def inv_search_query_handler(update: Update, context: ContextTypes.DEFAULT
         
         if not results:
             logger.info("[INVOICE_SEARCH] no_results from db or registry")
-            await update.message.reply_text("No users found. Try a different query.")
+            help_msg = (
+                "❌ No users found.\n\n"
+                "💡 **Search Tips:**\n"
+                "• Try a different spelling or partial name\n"
+                "• Search by Telegram username (with or without @)\n"
+                "• Search by user ID (numeric)\n"
+                "• Pending/unapproved users may not appear in some flows\n\n"
+                "Try a different query or check user approval status."
+            )
+            await update.message.reply_text(help_msg, parse_mode='Markdown')
             return INV_SEARCH_QUERY
 
         # Build list with Select buttons
@@ -112,11 +121,21 @@ async def inv_search_query_handler(update: Update, context: ContextTypes.DEFAULT
             uid = row.get('user_id')
             uname = row.get('telegram_username') or row.get('username') or ''
             fullname = row.get('full_name') or 'Unknown'
-            # Format: Name (@username if exists) \n ID: 123456
+            approval = row.get('approval_status', 'unknown')
+            
+            # Format: Name (@username if exists) \n ID: 123456 | Status
             user_display = f"{fullname}"
             if uname:
                 user_display += f" (@{uname})"
             user_display += f"\nID: {uid}"
+            
+            # Add approval status indicator
+            if approval == 'pending':
+                user_display += " ⏳ Pending"
+            elif approval == 'rejected':
+                user_display += " ❌ Rejected"
+            elif approval == 'approved':
+                user_display += " ✅ Approved"
             
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Select", callback_data=f"inv_select_{uid}")]])
             await update.message.reply_text(user_display, reply_markup=kb)

@@ -189,17 +189,41 @@ def get_pending_users():
 
 
 def search_users(term: str, limit: int = 10, offset: int = 0):
-    """Search users by full_name or telegram_username using ILIKE for partial matches."""
+    """Search users by full_name, telegram_username, or user_id using ILIKE for partial matches.
+    
+    Returns users with their approval_status so callers can filter or display status.
+    Supports fuzzy search with wildcards for names/usernames and exact match for numeric IDs.
+    """
     try:
-        like = f"%{term}%"
-        query = """
-            SELECT user_id, telegram_username, full_name
-            FROM users
-            WHERE (full_name ILIKE %s OR telegram_username ILIKE %s)
-            ORDER BY full_name ASC
-            LIMIT %s OFFSET %s
-        """
-        rows = execute_query(query, (like, like, limit, offset))
+        # Check if term is numeric (user_id search)
+        if term.strip().isdigit():
+            user_id = int(term.strip())
+            query = """
+                SELECT user_id, telegram_username, full_name, approval_status
+                FROM users
+                WHERE user_id = %s
+                LIMIT %s OFFSET %s
+            """
+            rows = execute_query(query, (user_id, limit, offset))
+        else:
+            # Fuzzy text search with ILIKE and wildcards
+            like = f"%{term}%"
+            query = """
+                SELECT user_id, telegram_username, full_name, approval_status
+                FROM users
+                WHERE (full_name ILIKE %s OR telegram_username ILIKE %s)
+                ORDER BY 
+                    CASE 
+                        WHEN approval_status = 'approved' THEN 1
+                        WHEN approval_status = 'pending' THEN 2
+                        ELSE 3
+                    END,
+                    full_name ASC
+                LIMIT %s OFFSET %s
+            """
+            rows = execute_query(query, (like, like, limit, offset))
+        
+        logger.info(f"[USER_SEARCH] query='{term}' results={len(rows) if rows else 0}")
         return rows or []
     except Exception as e:
         logger.error(f"Error searching users for term '{term}': {e}")

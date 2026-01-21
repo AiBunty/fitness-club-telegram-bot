@@ -805,5 +805,6 @@ def get_invoice_v2_handler():
         fallbacks=[
             CallbackQueryHandler(handle_cancel, pattern="^inv2_cancel$"),
         ],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
         per_message=False,
     )
