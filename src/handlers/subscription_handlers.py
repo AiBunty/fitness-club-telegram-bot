@@ -2941,7 +2941,10 @@ def get_subscription_conversation_handler():
             ],
         },
         fallbacks=[],
-        per_message=False
+        per_message=False,
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        per_chat=True,  # CRITICAL: Isolate conversations per chat for 200+ users
+        per_user=True   # CRITICAL: Isolate conversations per user
     )
 
 

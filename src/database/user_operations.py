@@ -78,7 +78,7 @@ def get_total_users_count():
     return result['count'] if result else 0
 
 def delete_user(user_id: int):
-    """Delete a user completely from the database
+    """Delete a user completely from the database with connection pool management
     
     Args:
         user_id: Telegram user ID (64-bit BigInt)
@@ -86,6 +86,8 @@ def delete_user(user_id: int):
     Returns:
         dict: Deleted user record with full_name, or None if not found
     """
+    from src.database.connection import DatabaseConnectionPool
+    
     # Validate user_id is a positive integer
     if not isinstance(user_id, int) or user_id <= 0:
         logger.error(f"Invalid user_id for deletion: {user_id} (type: {type(user_id)})")
@@ -94,8 +96,6 @@ def delete_user(user_id: int):
     logger.info(f"[DELETE_USER] Starting deletion for user_id={user_id}")
     
     # Delete all related records first to avoid foreign key violations
-    # Each delete is independent - if a table doesn't exist, we skip it
-    
     tables_to_clean = [
         "subscription_payments",
         "subscription_requests", 
@@ -109,52 +109,125 @@ def delete_user(user_id: int):
     deleted_counts = {}
     for table in tables_to_clean:
         try:
-            # PostgreSQL handles BIGINT comparison automatically
-            result = execute_query(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
+            # CRITICAL: Use BIGINT casting for 64-bit Telegram IDs
+            result = execute_query(f"DELETE FROM {table} WHERE user_id = %s::BIGINT", (user_id,))
             deleted_counts[table] = result if isinstance(result, int) else 0
             logger.debug(f"[DELETE_USER] Deleted {deleted_counts[table]} records from {table} for user {user_id}")
         except Exception as e:
-            # Table might not exist or other issue - log and continue
             logger.debug(f"[DELETE_USER] Skipping {table} for user {user_id}: {e}")
     
-    # Finally delete the user
+    # Finally delete the user with connection pool management
+    pool = None
+    conn = None
     try:
-        query = "DELETE FROM users WHERE user_id = %s RETURNING full_name"
-        result = execute_query(query, (user_id,), fetch_one=True)
-        if result:
-            logger.info(f"[DELETE_USER] User deleted successfully: {user_id} - {result['full_name']} (cleaned {sum(deleted_counts.values())} related records)")
-        else:
-            logger.warning(f"[DELETE_USER] User {user_id} not found in database")
-        return result
+        pool = DatabaseConnectionPool().get_pool()
+        conn = pool.getconn()
+        
+        with conn.cursor() as cursor:
+            # CRITICAL: Use BIGINT casting to ensure proper type matching
+            cursor.execute("DELETE FROM users WHERE user_id = %s::BIGINT RETURNING full_name", (user_id,))
+            result = cursor.fetchone()
+            conn.commit()
+            
+            if result:
+                logger.info(f"[DELETE_USER] User deleted: {user_id} - {result[0]} (cleaned {sum(deleted_counts.values())} related records)")
+                return {'full_name': result[0]}
+            else:
+                logger.warning(f"[DELETE_USER] User {user_id} not found in database")
+                return None
+                
     except Exception as e:
-        logger.error(f"Error deleting user {user_id}: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        logger.error(f"[DELETE_USER] Error deleting user {user_id}: {e}")
         return None
+    finally:
+        # CRITICAL: Always return connection to pool for 200+ user stability
+        if conn and pool:
+            try:
+                pool.putconn(conn)
+                logger.debug(f"[DELETE_USER] Connection returned to pool for user {user_id}")
+            except Exception as e:
+                logger.error(f"[DELETE_USER] Error returning connection to pool: {e}")
 
 def ban_user(user_id: int, reason: str = None):
-    """Ban a user from using the bot"""
-    query = """
-        UPDATE users 
-        SET is_banned = TRUE, ban_reason = %s, banned_at = CURRENT_TIMESTAMP
-        WHERE user_id = %s 
-        RETURNING full_name
-    """
-    result = execute_query(query, (reason, user_id), fetch_one=True)
-    if result:
-        logger.info(f"User banned: {user_id} - {result['full_name']}")
-    return result
+    """Ban a user from using the bot with connection pool management"""
+    from src.database.connection import DatabaseConnectionPool
+    
+    pool = None
+    conn = None
+    try:
+        pool = DatabaseConnectionPool().get_pool()
+        conn = pool.getconn()
+        
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET is_banned = TRUE, ban_reason = %s, banned_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = %s::BIGINT RETURNING full_name",
+                (reason, user_id)
+            )
+            result = cursor.fetchone()
+            conn.commit()
+            
+            if result:
+                logger.info(f"User banned: {user_id} - {result[0]}")
+                return {'full_name': result[0]}
+            return None
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        logger.error(f"Error banning user {user_id}: {e}")
+        return None
+    finally:
+        if conn and pool:
+            try:
+                pool.putconn(conn)
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {e}")
 
 def unban_user(user_id: int):
-    """Unban a user"""
-    query = """
-        UPDATE users 
-        SET is_banned = FALSE, ban_reason = NULL, banned_at = NULL
-        WHERE user_id = %s 
-        RETURNING full_name
-    """
-    result = execute_query(query, (user_id,), fetch_one=True)
-    if result:
-        logger.info(f"User unbanned: {user_id} - {result['full_name']}")
-    return result
+    """Unban a user with connection pool management"""
+    from src.database.connection import DatabaseConnectionPool
+    
+    pool = None
+    conn = None
+    try:
+        pool = DatabaseConnectionPool().get_pool()
+        conn = pool.getconn()
+        
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET is_banned = FALSE, ban_reason = NULL, banned_at = NULL "
+                "WHERE user_id = %s::BIGINT RETURNING full_name",
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            conn.commit()
+            
+            if result:
+                logger.info(f"User unbanned: {user_id} - {result[0]}")
+                return {'full_name': result[0]}
+            return None
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        logger.error(f"Error unbanning user {user_id}: {e}")
+        return None
+    finally:
+        if conn and pool:
+            try:
+                pool.putconn(conn)
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {e}")
 
 def is_user_banned(user_id: int) -> bool:
     """Check if a user is banned"""

@@ -415,10 +415,10 @@ async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user ID input for management"""
-    # CRITICAL FIX: Strip input to remove leading/trailing spaces
-    input_text = update.message.text.strip()
+    # CRITICAL FIX: Sanitize input with int(str().strip()) to ensure proper type handling
+    input_text = str(update.message.text).strip()
     
-    # Validate input is numeric
+    # Validate input is numeric BEFORE attempting int conversion
     if not input_text.isdigit():
         await update.message.reply_text(
             "❌ Invalid format. Please send a valid User ID (numbers only).\n\n"
@@ -433,7 +433,7 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
         return MANAGE_USER_MENU
     
     try:
-        # CRITICAL FIX: Handle as 64-bit integer (Telegram IDs can exceed 32-bit limit)
+        # CRITICAL FIX: Use int(str().strip()) for proper type conversion (Telegram IDs are 64-bit BIGINT)
         user_id = int(input_text)
         
         # Validate range (Telegram IDs are positive and reasonably large)
@@ -864,5 +864,7 @@ def get_manage_users_conversation_handler():
             CommandHandler('cancel', lambda u, c: ConversationHandler.END)
         ],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
-        per_message=False
+        per_message=False,
+        per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
+        per_user=True   # CRITICAL: Isolate per user for admin concurrency
     )

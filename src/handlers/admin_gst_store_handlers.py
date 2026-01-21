@@ -375,7 +375,9 @@ def get_store_and_gst_handlers():
         },
         fallbacks=[],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
-        per_message=False
+        per_message=False,
+        per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
+        per_user=True   # CRITICAL: Isolate per user for admin concurrency
     )
 
     store_conv = ConversationHandler(
@@ -396,7 +398,9 @@ def get_store_and_gst_handlers():
         },
         fallbacks=[],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
-        per_message=False
+        per_message=False,
+        per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
+        per_user=True   # CRITICAL: Isolate per user for admin concurrency
     )
 
     return gst_conv, store_conv

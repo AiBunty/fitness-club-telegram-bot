@@ -451,6 +451,60 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel_payment)]
     )
     
+    # ==================== CRITICAL: CONVERSATION HANDLERS FIRST ====================
+    # ALL ConversationHandlers MUST be at the TOP to prevent generic callback interception
+    # Order: User Management → Registration → Invoice → AR → Subscriptions → Store
+    
+    logger.info("[BOT] Registering ConversationHandlers (PRIORITY ORDER)")
+    
+    # User Management Conversation (HIGHEST PRIORITY - manages callbacks like manage_*)
+    application.add_handler(get_manage_users_conversation_handler())
+    application.add_handler(get_template_conversation_handler())
+    application.add_handler(get_followup_conversation_handler())
+    logger.info("[BOT] ✅ User Management handlers registered")
+    
+    # Registration and Approval Conversations
+    application.add_handler(get_subscription_conversation_handler())
+    application.add_handler(get_admin_approval_conversation_handler())
+    logger.info("[BOT] ✅ Registration handlers registered")
+    
+    # Invoice v2 (re-enabled with lazy PDF import)
+    # CRITICAL: Registered BEFORE GST/Store to ensure callback priority (cmd_invoices, inv2_*)
+    from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
+    application.add_handler(get_invoice_v2_handler())
+    application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
+    application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
+    logger.info("[BOT] ✅ Invoice v2 handlers registered (BEFORE GST/Store)")
+    
+    # Accounts Receivable (split-payment) conversation
+    application.add_handler(get_ar_conversation_handler())
+    logger.info("[BOT] ✅ AR handlers registered")
+    
+    # GST & Store items handlers
+    from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
+    gst_conv, store_conv = get_store_and_gst_handlers()
+    application.add_handler(gst_conv)
+    application.add_handler(store_conv)
+    logger.info("[BOT] ✅ GST/Store handlers registered")
+    
+    # Store user-facing handlers
+    from src.handlers.store_user_handlers import cmd_store
+    application.add_handler(CommandHandler('store', cmd_store))
+    application.add_handler(get_store_conversation_handler())
+    application.add_handler(get_store_admin_conversation_handler())
+    application.add_handler(get_store_excel_conversation_handler())
+    logger.info("[BOT] ✅ Store user handlers registered")
+    
+    # Broadcast handlers
+    application.add_handler(get_broadcast_conversation_handler())
+    logger.info("[BOT] ✅ Broadcast handlers registered")
+    
+    # Payment request handlers
+    application.add_handler(payment_request_conversation)
+    application.add_handler(approval_conversation)
+    logger.info("[BOT] ✅ Payment request handlers registered")
+    
+    # ==================== ACTIVITY TRACKING HANDLERS ====================
     application.add_handler(weight_handler)
     application.add_handler(water_handler)
     application.add_handler(meal_handler)
@@ -458,7 +512,7 @@ def main():
     application.add_handler(checkin_handler)
     application.add_handler(payment_handler)
     
-    # Admin handlers
+    # ==================== ADMIN COMMAND HANDLERS ====================
     application.add_handler(CommandHandler('pending_attendance', cmd_pending_attendance))
     application.add_handler(CommandHandler('pending_shakes', cmd_pending_shakes))
     application.add_handler(CommandHandler('pending_users', cmd_pending_users))
@@ -468,65 +522,20 @@ def main():
     application.add_handler(CommandHandler('add_admin', cmd_add_admin))
     application.add_handler(CommandHandler('remove_admin', cmd_remove_admin))
     application.add_handler(CommandHandler('list_admins', cmd_list_admins))
-    application.add_handler(get_manual_shake_deduction_handler())  # Manual shake deduction
-    
-    # QR Attendance handlers
+    application.add_handler(get_manual_shake_deduction_handler())
     application.add_handler(CommandHandler('qr_attendance_link', cmd_qr_attendance_link))
     application.add_handler(CommandHandler('override_attendance', cmd_override_attendance))
     application.add_handler(CommandHandler('download_qr_code', cmd_download_qr_code))
-    
-    # NEW: Enhanced Admin Panel Handlers - MUST be BEFORE numeric handlers
     application.add_handler(CommandHandler('admin_panel', cmd_admin_panel))
-    application.add_handler(get_manage_users_conversation_handler())
-    application.add_handler(get_template_conversation_handler())
-    application.add_handler(get_followup_conversation_handler())
+    application.add_handler(CommandHandler('my_subscription', cmd_my_subscription))
+    application.add_handler(CommandHandler('admin_subscriptions', cmd_admin_subscriptions))
+    application.add_handler(get_admin_settings_handler())
+    application.add_handler(get_reminder_conversation_handler())
 
     # DEBUG: log raw incoming updates without blocking conversation handlers
     application.add_handler(MessageHandler(filters.ALL, raw_update_logger), group=1)
     
-    # Subscription handlers - MUST be BEFORE numeric handlers
-    application.add_handler(get_subscription_conversation_handler())
-    application.add_handler(get_admin_approval_conversation_handler())  # Admin approval flow
-    application.add_handler(CommandHandler('my_subscription', cmd_my_subscription))
-    application.add_handler(CommandHandler('admin_subscriptions', cmd_admin_subscriptions))
-    
-    # Admin settings handler
-    application.add_handler(get_admin_settings_handler())
-    
-    # Reminder settings handler
-    application.add_handler(get_reminder_conversation_handler())
-
-    # Accounts Receivable (split-payment) conversation
-    application.add_handler(get_ar_conversation_handler())
-    
-    # Invoice v2 (re-enabled with lazy PDF import)
-    # CRITICAL: Registered BEFORE GST/Store to ensure callback priority
-    from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
-    logger.info("[BOT] Registering Invoice v2 handler (BEFORE GST/Store)")
-    application.add_handler(get_invoice_v2_handler())
-    # User action callbacks (pay/reject)
-    application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
-    application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
-    logger.info("[BOT] Invoice v2 handlers registered successfully")
-    
-    # GST & Store items handlers
-    from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
-    gst_conv, store_conv = get_store_and_gst_handlers()
-    application.add_handler(gst_conv)
-    application.add_handler(store_conv)
-    
-    # OLD Invoice pay/reject callbacks (DEPRECATED - Use Invoice v2)
-    # from src.handlers.invoice_handlers import invoice_pay_clicked, invoice_reject_clicked
-    # application.add_handler(CallbackQueryHandler(invoice_pay_clicked, pattern=r"^invoice_pay_\d+$"))
-    # application.add_handler(CallbackQueryHandler(invoice_reject_clicked, pattern=r"^invoice_reject_\d+$"))
-    
-    # Store handlers
-    # Register cart-based store handlers
-    from src.handlers.store_user_handlers import cmd_store
-    application.add_handler(CommandHandler('store', cmd_store))
-    application.add_handler(get_store_conversation_handler())
-    application.add_handler(get_store_admin_conversation_handler())
-    application.add_handler(get_store_excel_conversation_handler())
+    # ==================== SUBSCRIPTION & PAYMENT CALLBACKS ====================
 
     application.add_handler(CallbackQueryHandler(callback_admin_approve_sub, pattern="^admin_sub_approve$"))
     application.add_handler(CallbackQueryHandler(callback_approve_sub_standard, pattern="^sub_approve_"))
@@ -554,17 +563,14 @@ def main():
     application.add_handler(CommandHandler('notifications', cmd_notifications))
     application.add_handler(CommandHandler('admin_dashboard', cmd_admin_dashboard))
     
-    # Broadcast handlers
-    application.add_handler(get_broadcast_conversation_handler())
+    # Followup settings
     application.add_handler(CommandHandler('followup_settings', cmd_followup_settings))
     application.add_handler(CallbackQueryHandler(cmd_followup_settings, pattern="^cmd_followup_settings$"))
     application.add_handler(CallbackQueryHandler(cmd_tune_followup_settings, pattern="^tune_followup_settings$"))
     application.add_handler(CallbackQueryHandler(callback_tune_followup_interval, pattern="^tune_(7day|14day|30day)$"))
     application.add_handler(CallbackQueryHandler(view_broadcast_history, pattern="^view_followup_log$"))
     
-    # Payment request handlers
-    application.add_handler(payment_request_conversation)
-    application.add_handler(approval_conversation)
+    # Payment request command handlers
     application.add_handler(CommandHandler('pending_requests', cmd_pending_requests))
     application.add_handler(CallbackQueryHandler(callback_review_request, pattern=r'^review_request_\d+$'))
     application.add_handler(CallbackQueryHandler(callback_reject_request, pattern=r'^reject_req_\d+$'))
@@ -593,10 +599,18 @@ def main():
     application.add_handler(CallbackQueryHandler(callback_top_activities, pattern="^dashboard_activities$"))
     application.add_handler(CallbackQueryHandler(callback_admin_dashboard, pattern="^admin_dashboard$"))
     
-    # Callback query handler for inline buttons (exclude subscription/payment/conversation callbacks)
-    # Exclude invoice entry callbacks (cmd_invoices, inv2_*) so ConversationHandler can handle it
-    # Legacy inv_* also excluded (deprecated)
-    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel|cmd_invoices|inv_|inv2_)"))
+    # ==================== GENERIC CALLBACK HANDLER (LAST PRIORITY) ====================
+    # Exclude ALL conversation-managed callbacks to prevent interception:
+    # - manage_* (User Management: toggle_ban, delete_user, etc.)
+    # - admin_invoice (Invoice v2 creation)
+    # - cmd_invoices, inv2_*, inv_* (Invoice callbacks)
+    # - sub_*, admin_sub_* (Subscriptions)
+    # - pay_method, admin_approve, admin_reject (Payments)
+    application.add_handler(CallbackQueryHandler(
+        handle_callback_query, 
+        pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel|cmd_invoices|inv_|inv2_|manage_|admin_invoice)"
+    ))
+    logger.info("[BOT] ✅ Generic callback handler registered (LAST - with exclusions)")
     application.add_handler(CallbackQueryHandler(handle_analytics_callback))
     application.add_handler(CallbackQueryHandler(callback_view_notification, pattern="^notif_"))
     application.add_handler(CallbackQueryHandler(callback_delete_notification, pattern="^delete_notif_"))

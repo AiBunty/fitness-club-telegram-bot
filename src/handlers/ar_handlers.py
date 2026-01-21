@@ -257,5 +257,9 @@ def get_ar_conversation_handler():
             AR_ADD_LINE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ar_add_line_amount)],
             AR_REVIEW_LINES: [CallbackQueryHandler(ar_review_actions, pattern="^(ar_add_line|ar_confirm_all|ar_cancel)$")],
         },
-        fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
+        fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        per_message=False,
+        per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
+        per_user=True   # CRITICAL: Isolate per user for admin concurrency
     )
