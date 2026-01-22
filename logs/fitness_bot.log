@@ -9898,3 +9898,6 @@ psycopg2.InterfaceError: connection already closed
 2026-01-19 17:54:25,284 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8517722262:AAHhqvLPUi5Mhz6rExwhZYDvyjEajNaljtg/getUpdates "HTTP/1.1 200 OK"
 2026-01-19 17:54:35,460 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8517722262:AAHhqvLPUi5Mhz6rExwhZYDvyjEajNaljtg/getUpdates "HTTP/1.1 200 OK"
 2026-01-19 17:54:45,662 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8517722262:AAHhqvLPUi5Mhz6rExwhZYDvyjEajNaljtg/getUpdates "HTTP/1.1 200 OK"
+2026-01-22 08:45:40,043 - src.bot - INFO - USE_LOCAL_DB=true — skipping DB connection test and remote DB usage
+2026-01-22 08:45:40,043 - src.bot - INFO - Database OK! Starting bot...
+2026-01-22 08:45:40,044 - src.bot - INFO - [APP] Building Telegram Application with token...
