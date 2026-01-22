@@ -1,22 +1,54 @@
 import os
 from dotenv import load_dotenv
+from pathlib import Path
+import logging
 
-# Load .env file and OVERRIDE any existing environment variables
-load_dotenv(override=True)
+# Load .env (do not override system env unless explicitly set)
+load_dotenv(override=False)
 
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+logger = logging.getLogger(__name__)
+
+# Environment mode flags
+USE_LOCAL_DB = os.getenv('USE_LOCAL_DB', 'true').lower() in ('1', 'true', 'yes')
+USE_REMOTE_DB = os.getenv('USE_REMOTE_DB', 'false').lower() in ('1', 'true', 'yes')
+ENV = os.getenv('ENV', 'local')
+
+if USE_LOCAL_DB and USE_REMOTE_DB:
+    raise RuntimeError("Config error: USE_LOCAL_DB and USE_REMOTE_DB cannot both be true")
+
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8517722262:AAHhE7y3ifKUIHz-JzmHyZ-miR5MJD5PPPY')
 SUPER_ADMIN_PASSWORD = os.getenv('SUPER_ADMIN_PASSWORD', 'ChangeMe123!')
 SUPER_ADMIN_USER_ID = os.getenv('SUPER_ADMIN_USER_ID', '0')
 
+# Database config only used when USE_REMOTE_DB is True
 DATABASE_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
-    'port': os.getenv('DB_PORT', '5432'),
+    'port': int(os.getenv('DB_PORT', '5432')),
     'database': os.getenv('DB_NAME', 'fitness_club_db'),
     'user': os.getenv('DB_USER', 'postgres'),
     'password': os.getenv('DB_PASSWORD', ''),
-    'sslmode': 'require'  # Required for Neon cloud database
+    'sslmode': os.getenv('DB_SSLMODE', 'require')
 }
 
+# Data directory and canonical file paths (local-only sources)
+BASE_DIR = Path(__file__).parent.parent
+DATA_DIR = BASE_DIR / 'data'
+USERS_FILE = str(DATA_DIR / 'users.json')
+STORE_ITEMS_FILE = str(DATA_DIR / 'store_items.json')
+INVOICES_V2_FILE = str(DATA_DIR / 'invoices_v2.json')
+
+# Geofence for studio check-in (set in .env)
+def _to_float(val: str, default: float) -> float:
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+GEOFENCE_LAT = _to_float(os.getenv('GEOFENCE_LAT', '0'), 0.0)
+GEOFENCE_LNG = _to_float(os.getenv('GEOFENCE_LNG', '0'), 0.0)
+GEOFENCE_RADIUS_M = int(os.getenv('GEOFENCE_RADIUS_M', '10'))
+
+# Minimal feature flags and defaults
 POINTS_CONFIG = {
     'attendance': 50,
     'weight_log': 10,
@@ -31,25 +63,4 @@ FEES_CONFIG = {
     'yearly': 4000,
 }
 
-# Geofence for studio check-in (set in .env)
-def _to_float(val: str, default: float) -> float:
-    try:
-        return float(val)
-    except Exception:
-        return default
-
-GEOFENCE_LAT = _to_float(os.getenv('GEOFENCE_LAT', '0'), 0.0)
-GEOFENCE_LNG = _to_float(os.getenv('GEOFENCE_LNG', '0'), 0.0)
-GEOFENCE_RADIUS_M = int(os.getenv('GEOFENCE_RADIUS_M', '10'))
-
-# Gym Studio profile defaults (editable via admin settings)
-GYM_PROFILE = {
-    'name': os.getenv('GYM_NAME', 'Wanis Level Up Studio'),
-    'address': os.getenv('GYM_ADDRESS', '101, 1st floor, Padma Vishwa Orchid,\nCricket Ground, opposite Doctor BS Moonje Marg,\nabove Pepperfry Showroom,\nMahatma Nagar, Parijat Nagar,\nNashik, Maharashtra 422005'),
-    'phone': os.getenv('GYM_PHONE', '091582 43377'),
-    'gst': os.getenv('GYM_GST', ''),
-    'logo_url': os.getenv('GYM_LOGO_URL', ''),
-    'timings': os.getenv('GYM_TIMINGS', 'Mon–Sat: 6–11 AM, 5–9 PM\nSunday: Closed'),
-    'facebook': os.getenv('GYM_FACEBOOK', 'https://www.facebook.com/wanisclublevelup'),
-    'instagram': os.getenv('GYM_INSTAGRAM', 'https://www.instagram.com/wanisclub_levelup')
-}
+logger.info(f"[CONFIG] mode={'local' if USE_LOCAL_DB else 'remote' if USE_REMOTE_DB else ENV}")

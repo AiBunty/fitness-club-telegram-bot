@@ -18,7 +18,7 @@ from src.handlers.store_user_handlers import get_store_conversation_handler
 from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
 from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
 from src.database.store_operations import create_or_update_product  # For migration check
-from src.config import TELEGRAM_BOT_TOKEN
+from src.config import TELEGRAM_BOT_TOKEN, USE_LOCAL_DB
 from src.database.connection import test_connection
 from src.handlers.user_handlers import (
     start_command, begin_registration, get_name, get_phone, get_age, 
@@ -109,6 +109,7 @@ from src.handlers.subscription_handlers import (
     get_subscription_conversation_handler, get_admin_approval_conversation_handler,
     callback_admin_reject_upi, callback_admin_reject_cash
 )
+from src.invoices.handlers import get_invoice_conversation_handler
 from src.handlers.ar_handlers import (
     get_ar_conversation_handler, ar_export_overdue, ar_credit_summary
 )
@@ -287,14 +288,17 @@ async def set_commands_for_user(user_id: int, bot) -> None:
 
 def main():
 
-    logger.info("Testing database connection...")
-    # Allow skipping DB test for local debugging by setting SKIP_DB_TEST=1
-    if os.environ.get('SKIP_DB_TEST') != '1':
-        if not test_connection():
-            logger.error("Database connection failed!")
-            sys.exit(1)
+    # Skip DB test when running in local-only mode
+    if USE_LOCAL_DB:
+        logger.info("USE_LOCAL_DB=true — skipping DB connection test and remote DB usage")
     else:
-        logger.info("SKIP_DB_TEST=1 set — skipping DB connection test")
+        logger.info("Testing database connection...")
+        if os.environ.get('SKIP_DB_TEST') != '1':
+            if not test_connection():
+                logger.error("Database connection failed!")
+                sys.exit(1)
+        else:
+            logger.info("SKIP_DB_TEST=1 set — skipping DB connection test")
     
     logger.info("Database OK! Starting bot...")
     
@@ -381,6 +385,13 @@ def main():
         filters.Regex(r"(?i)^(hi|hello|hey|greetings)[\s!]*$"),
         handle_greeting
     ))
+
+    # Invoice conversation (greenfield implementation)
+    try:
+        application.add_handler(get_invoice_conversation_handler())
+        logger.info("[INVOICE] conversation handler registered")
+    except Exception as e:
+        logger.error(f"[INVOICE] failed to register conversation handler: {e}")
     
     # Activity logging conversations
     weight_handler = ConversationHandler(
@@ -454,7 +465,7 @@ def main():
     # ==================== CRITICAL: CONVERSATION HANDLERS FIRST ====================
     # ALL ConversationHandlers MUST be at the TOP to prevent generic callback interception
     # MAXIMUM PRIORITY: User Management MUST be FIRST (before even Invoice)
-    # Order: User Management (HIGHEST) → Registration → Invoice → AR → Subscriptions → Store (LOWEST)
+    # Order: User Management (HIGHEST) → Store Admin → Invoice → Registration/Approval → AR → Subscriptions → Store user flows (LOWEST)
     
     logger.info("[BOT] Registering ConversationHandlers (STRICT PRIORITY ORDER)")
     
@@ -466,31 +477,31 @@ def main():
     application.add_handler(get_followup_conversation_handler())
     logger.info("[BOT] ✅ User Management handlers registered (HIGHEST PRIORITY)")
     
-    # Registration and Approval Conversations (PRIORITY 2)
-    logger.info("[BOT] Registering Registration handlers (PRIORITY 2/7)")
-    application.add_handler(get_subscription_conversation_handler())
-    application.add_handler(get_admin_approval_conversation_handler())
-    logger.info("[BOT] ✅ Registration handlers registered")
-    
-    # Invoice v2 (PRIORITY 3 - after management to prevent User ID interception)
-    # CRITICAL: Registered AFTER Management, BEFORE GST/Store to ensure callback priority
+    # PRIORITY 2: Admin Store/GST handlers before Invoice to avoid item text interception
+    logger.info("[BOT] Registering Store/GST admin handlers (PRIORITY 2/7)")
+    from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
+    gst_conv, store_conv = get_store_and_gst_handlers()
+    application.add_handler(store_conv)
+    application.add_handler(gst_conv)
+    logger.info("[BOT] ✅ Store/GST handlers registered (BEFORE Invoice)")
+
+    # Invoice v2 (PRIORITY 3 - after management and store to prevent User ID interception)
     logger.info("[BOT] Registering Invoice v2 handlers (PRIORITY 3/7)")
     from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
     application.add_handler(get_invoice_v2_handler())
     application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
-    logger.info("[BOT] ✅ Invoice v2 handlers registered (AFTER Management, BEFORE Store)")
+    logger.info("[BOT] ✅ Invoice v2 handlers registered (AFTER Management and Store)")
+
+    # Registration and Approval Conversations (PRIORITY 4)
+    logger.info("[BOT] Registering Registration handlers (PRIORITY 4/7)")
+    application.add_handler(get_subscription_conversation_handler())
+    application.add_handler(get_admin_approval_conversation_handler())
+    logger.info("[BOT] ✅ Registration handlers registered")
     
     # Accounts Receivable (split-payment) conversation
     application.add_handler(get_ar_conversation_handler())
     logger.info("[BOT] ✅ AR handlers registered")
-    
-    # GST & Store items handlers
-    from src.handlers.admin_gst_store_handlers import get_store_and_gst_handlers
-    gst_conv, store_conv = get_store_and_gst_handlers()
-    application.add_handler(gst_conv)
-    application.add_handler(store_conv)
-    logger.info("[BOT] ✅ GST/Store handlers registered")
     
     # Store user-facing handlers
     from src.handlers.store_user_handlers import cmd_store
@@ -897,15 +908,23 @@ def main():
     
     try:
         logger.info("[BOT] Starting polling...")
-        
-        # Use run_polling which should block indefinitely
-        application.run_polling(
-            allowed_updates=['message', 'callback_query'],
-            stop_signals=None  # Don't let PTB handle signals, we'll handle manually
-        )
-        
+        # Allow temporary disabling of polling for local test runs
+        import os
+        if os.getenv('DISABLE_POLLING_FOR_TEST', 'false').lower() in ('1', 'true', 'yes'):
+            logger.info('[BOT] Polling disabled via DISABLE_POLLING_FOR_TEST env var (test mode)')
+        else:
+                # Use run_polling only when explicitly enabled via env var
+                # Default: polling is DISABLED to avoid interfering with test runs.
+                if os.getenv('ENABLE_POLLING', 'false').lower() in ('1', 'true', 'yes'):
+                    application.run_polling(
+                        allowed_updates=['message', 'callback_query'],
+                        stop_signals=None  # Don't let PTB handle signals, we'll handle manually
+                    )
+                else:
+                    logger.info('[BOT] Polling disabled by default. Set ENABLE_POLLING=true to enable in deployed environments')
+
         logger.info("[BOT] Polling completed - bot will restart via wrapper script")
-        
+
     except KeyboardInterrupt:
         logger.info("[BOT] Interrupted by user (Ctrl+C)")
     except Exception as e:

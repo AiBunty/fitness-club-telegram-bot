@@ -6,10 +6,15 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional
+from src.config import USERS_FILE
+import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_FILE = Path(__file__).parent.parent / 'data' / 'users.json'
+logger = logging.getLogger(__name__)
+
+REGISTRY_FILE = Path(USERS_FILE)
 
 
 def load_registry() -> List[Dict]:
@@ -18,7 +23,9 @@ def load_registry() -> List[Dict]:
         return []
     try:
         with open(REGISTRY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            users = json.load(f)
+            logger.info(f"[USER_REGISTRY] loaded_users_count={len(users)} path={REGISTRY_FILE}")
+            return users
     except Exception as e:
         logger.error(f"[USER_REGISTRY] Error loading: {e}")
         return []
@@ -53,7 +60,7 @@ def track_user(user_id: int, first_name: str = '', last_name: str = '',
         full_name = f"User {user_id}"
     
     # Check if user exists
-    existing = next((u for u in users if u.get('user_id') == user_id), None)
+    existing = next((u for u in users if u.get('user_id') == user_id or u.get('telegram_id') == user_id), None)
     
     if existing:
         # Update existing user
@@ -65,6 +72,7 @@ def track_user(user_id: int, first_name: str = '', last_name: str = '',
         # Add new user
         users.append({
             'user_id': user_id,
+            'telegram_id': user_id,
             'first_name': first_name,
             'last_name': last_name,
             'username': username,

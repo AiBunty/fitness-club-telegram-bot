@@ -3,7 +3,8 @@ from psycopg2 import InterfaceError, OperationalError, pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import logging
-from src.config import DATABASE_CONFIG
+from src.config import DATABASE_CONFIG, USE_REMOTE_DB, USE_LOCAL_DB
+from src.utils.db_guard import assert_no_remote_db_access
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,11 @@ class DatabaseConnectionPool:
         return cls._instance
     
     def get_pool(self):
-        if self._pool is None or self._pool.closed:
+        # Prevent pool initialization in local-only mode
+        if USE_LOCAL_DB and not USE_REMOTE_DB:
+            assert_no_remote_db_access("initialize connection pool")
+
+        if self._pool is None or getattr(self._pool, 'closed', False):
             # Create pool with min 5 connections, max 50 connections
             # Supports 200+ concurrent users with safety margin
             db_config = dict(DATABASE_CONFIG)

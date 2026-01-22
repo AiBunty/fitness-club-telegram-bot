@@ -5,6 +5,7 @@ from typing import Dict
 from io import BytesIO
 from src.utils.gst import load_gst_config, save_gst_config, is_gst_enabled, get_gst_mode, get_gst_percent
 from src.utils.store_items import add_or_update_item, load_store_items, find_items
+from src.utils.state_management import clear_stale_states
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ async def cmd_gst_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
+        clear_stale_states(update, context, flow_name="gst_settings")
         message = query.message
     else:
         message = update.message
@@ -92,13 +94,16 @@ async def cmd_create_store_items(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if query:
         await query.answer()
+        clear_stale_states(update, context, flow_name="store_admin")
         message = query.message
     else:
         message = update.message
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Create Item", callback_data="store_create_item")],
-        [InlineKeyboardButton("📥 Bulk Upload", callback_data="store_bulk_upload")],
+        [InlineKeyboardButton("📥 Bulk Upload (Excel)", callback_data="store_bulk_upload")],
+        [InlineKeyboardButton("📄 Download Sample Excel", callback_data="store_download_sample")],
+        [InlineKeyboardButton("📄 Download Existing Items", callback_data="store_download_existing")],
         [InlineKeyboardButton("⬅ Back", callback_data="admin_dashboard")],
     ])
     await message.reply_text("🏬 Store Items Master\n\nChoose action:", reply_markup=kb)
@@ -108,6 +113,7 @@ async def cmd_create_store_items(update: Update, context: ContextTypes.DEFAULT_T
 async def store_create_item_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    clear_stale_states(update, context, flow_name="store_admin")
     logger.info("[STORE_CREATE] entering create item flow")
     await query.edit_message_text("Enter Item Name:")
     return ITEM_NAME
@@ -185,8 +191,9 @@ async def store_item_gst(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def store_bulk_upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    clear_stale_states(update, context, flow_name="store_admin")
     logger.info("[STORE_BULK] entering bulk upload flow")
-    # generate simple sample excel
+    # generate sample excel (with Serial No column present)
     try:
         import asyncio
         from openpyxl import Workbook
@@ -195,8 +202,11 @@ async def store_bulk_upload_prompt(update: Update, context: ContextTypes.DEFAULT
         def generate_sample_excel():
             wb = Workbook()
             ws = wb.active
-            ws.append(['Item Name','HSN Code','MRP','GST %'])
-            ws.append(['Sample Item','1001', '499.00', '18'])
+            # Header with Serial No included
+            ws.append(['Serial No','Item Name','HSN Code','MRP','GST %'])
+            # Example rows: one empty serial (new), one with serial for update
+            ws.append(['', 'Sample New Item', '1001', 499.00, 18])
+            ws.append([1, 'Formula q', '4819', 1800.00, 18])
             bio = BytesIO()
             wb.save(bio)
             bio.seek(0)
@@ -206,7 +216,7 @@ async def store_bulk_upload_prompt(update: Update, context: ContextTypes.DEFAULT
         bio = await asyncio.to_thread(generate_sample_excel)
         
         await query.message.reply_document(document=InputFile(bio, filename='store_items_sample.xlsx'))
-        await query.message.reply_text('Upload filled Excel file (as attachment).')
+        await query.message.reply_text('Upload filled Excel file (as attachment). Ensure Serial No column present — leave empty for NEW items.')
         return BULK_UPLOAD_AWAIT  # Stay in conversation to await document
     except Exception as e:
         logger.error(f"[STORE_BULK] failed to send sample Excel: {e}")
@@ -248,44 +258,93 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text('❌ Excel file is empty or has no data rows.')
             return ConversationHandler.END
         
+        # Expected header includes Serial No
         header = [str(c).strip().lower() if c else '' for c in rows[0]]
-        name_i = header.index('item name') if 'item name' in header else 0
-        hsn_i = header.index('hsn code') if 'hsn code' in header else 1
-        mrp_i = header.index('mrp') if 'mrp' in header else 2
-        gst_i = header.index('gst %') if 'gst %' in header else 3
-        
-        added = 0
-        updated = 0
+        # Allow flexible column ordering but require these headers
+        try:
+            serial_i = header.index('serial no')
+            name_i = header.index('item name')
+            hsn_i = header.index('hsn code')
+            mrp_i = header.index('mrp')
+            gst_i = header.index('gst %')
+        except ValueError:
+            await update.message.reply_text('❌ Excel header mismatch. Required columns: Serial No, Item Name, HSN Code, MRP, GST %')
+            return ConversationHandler.END
+
+        rows_read = 0
+        new_items = 0
+        updated_items = 0
         skipped = 0
-        
+        serial_conflicts = []
+
         for r in rows[1:]:
+            rows_read += 1
             try:
-                name = str(r[name_i]).strip()
-                hsn = str(r[hsn_i]).strip() if hsn_i < len(r) else ''
-                mrp = float(r[mrp_i])
-                gst = float(r[gst_i])
-                
-                if not name or mrp <= 0 or gst < 0 or gst > 100:
+                # Read values safely
+                serial_cell = r[serial_i] if serial_i < len(r) else None
+                serial_val = serial_cell if serial_cell is None else serial_cell
+                serial_raw = str(serial_val).strip() if serial_val not in (None, '') else ''
+
+                name = str(r[name_i]).strip() if name_i < len(r) and r[name_i] is not None else ''
+                hsn = str(r[hsn_i]).strip() if hsn_i < len(r) and r[hsn_i] is not None else ''
+                mrp_raw = r[mrp_i] if mrp_i < len(r) else None
+                gst_raw = r[gst_i] if gst_i < len(r) else None
+
+                # Validation
+                if not name or not hsn:
                     skipped += 1
                     continue
-                
-                result = add_or_update_item({'name': name, 'hsn': hsn, 'mrp': mrp, 'gst': gst})
-                if result.get('is_new'):
-                    added += 1
+                try:
+                    mrp = float(mrp_raw)
+                    gst = float(gst_raw)
+                except Exception:
+                    skipped += 1
+                    continue
+                if mrp <= 0 or gst < 0 or gst > 100:
+                    skipped += 1
+                    continue
+
+                # Case A: Serial present
+                if serial_raw:
+                    try:
+                        s = int(float(serial_raw))
+                    except Exception:
+                        skipped += 1
+                        continue
+                    # Update by serial only
+                    try:
+                        res = add_or_update_item({'serial': s, 'name': name, 'hsn': hsn, 'mrp': mrp, 'gst': gst})
+                        updated_items += 1
+                    except KeyError:
+                        # serial not found -> skip
+                        skipped += 1
+                        serial_conflicts.append(serial_raw)
+                        continue
                 else:
-                    updated += 1
+                    # No serial: check by name+hsn
+                    res = add_or_update_item({'name': name, 'hsn': hsn, 'mrp': mrp, 'gst': gst})
+                    if res.get('is_new'):
+                        new_items += 1
+                    else:
+                        updated_items += 1
+
             except Exception as e:
-                logger.warning(f"[STORE_BULK] skipped row: {e}")
+                logger.warning(f"[STORE_BULK] skipped row due to exception: {e}")
                 skipped += 1
                 continue
         
-        logger.info(f"[STORE_BULK] rows_processed added={added} updated={updated} skipped={skipped}")
-        
+        logger.info(f"[STORE_EXCEL] rows_read={rows_read}")
+        logger.info(f"[STORE_EXCEL] new_items={new_items}")
+        logger.info(f"[STORE_EXCEL] updated_items={updated_items}")
+        logger.info(f"[STORE_EXCEL] skipped_rows={skipped}")
+        if serial_conflicts:
+            logger.info(f"[STORE_EXCEL] serial_conflict={serial_conflicts}")
+
         await update.message.reply_text(
-            f"✅ Bulk upload completed\n"
-            f"✔ Items added: {added}\n"
-            f"✏ Items updated: {updated}\n"
-            f"⚠ Skipped: {skipped}"
+            f"✅ Bulk upload completed\n\n"
+            f"➕ New items added: {new_items}\n"
+            f"✏ Items updated (price/GST): {updated_items}\n"
+            f"⚠ Rows skipped: {skipped}"
         )
         return ConversationHandler.END
         
@@ -293,6 +352,51 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
         logger.error(f"[STORE_BULK] error parsing excel: {e}")
         await update.message.reply_text('❌ Failed to parse Excel. Ensure it is a valid .xlsx file with required columns.\n\nPlease upload a valid Excel file or type /cancel to exit.')
         return BULK_UPLOAD_AWAIT
+
+
+async def store_download_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate an Excel of existing store items and send to admin."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        message = query.message
+    else:
+        message = update.message
+
+    try:
+        import asyncio
+        from openpyxl import Workbook
+
+        def generate_excel():
+            items = load_store_items()
+            wb = Workbook()
+            ws = wb.active
+            ws.append(['Serial No', 'Item Name', 'HSN Code', 'MRP', 'GST %'])
+            # sort by serial ascending
+            try:
+                items_sorted = sorted(items, key=lambda x: int(x.get('serial', 0)))
+            except Exception:
+                items_sorted = items
+            for it in items_sorted:
+                ws.append([
+                    it.get('serial', ''),
+                    it.get('name', ''),
+                    it.get('hsn', ''),
+                    float(it.get('mrp', 0)) if it.get('mrp', None) is not None else '',
+                    float(it.get('gst', 0)) if it.get('gst', None) is not None else ''
+                ])
+            bio = BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            return bio
+
+        bio = await asyncio.to_thread(generate_excel)
+        await message.reply_document(document=InputFile(bio, filename='store_items_current.xlsx'))
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"[STORE_DOWNLOAD] failed to generate/send excel: {e}")
+        await message.reply_text('❌ Failed to generate store items Excel. Ensure openpyxl is installed.')
+        return ConversationHandler.END
 
 
 # Store item search API used by invoice flow (DEPRECATED - DO NOT USE)
@@ -374,7 +478,7 @@ def get_store_and_gst_handlers():
             GST_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gst_edit_percent)]
         },
         fallbacks=[],
-        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        conversation_timeout=300,  # 5 minutes timeout to prevent stuck states
         per_message=False,
         per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
         per_user=True   # CRITICAL: Isolate per user for admin concurrency
@@ -385,6 +489,8 @@ def get_store_and_gst_handlers():
             CallbackQueryHandler(cmd_create_store_items, pattern='^cmd_create_store_items$'),
             CallbackQueryHandler(store_create_item_prompt, pattern='^store_create_item$'),
             CallbackQueryHandler(store_bulk_upload_prompt, pattern='^store_bulk_upload$'),
+            CallbackQueryHandler(store_bulk_upload_prompt, pattern='^store_download_sample$'),
+            CallbackQueryHandler(store_download_existing, pattern='^store_download_existing$'),
         ],
         states={
             ITEM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, store_item_name)],
@@ -397,7 +503,7 @@ def get_store_and_gst_handlers():
             ]
         },
         fallbacks=[],
-        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        conversation_timeout=300,  # 5 minutes timeout to prevent stuck states
         per_message=False,
         per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
         per_user=True   # CRITICAL: Isolate per user for admin concurrency

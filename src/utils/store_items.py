@@ -28,35 +28,76 @@ def get_next_serial(items: List[Dict]) -> int:
     return max(item.get("serial", 0) for item in items) + 1
 
 
+def get_item_by_serial(items: List[Dict], serial: int) -> Optional[Dict]:
+    for it in items:
+        if int(it.get('serial', 0)) == int(serial):
+            return it
+    return None
+
+
+def find_by_name_hsn(items: List[Dict], name: str, hsn: str) -> Optional[Dict]:
+    name_norm = (name or '').strip().lower()
+    hsn_norm = str(hsn or '').strip()
+    for it in items:
+        if (it.get('name','').strip().lower() == name_norm) and (str(it.get('hsn','')).strip() == hsn_norm):
+            return it
+    return None
+
+
 def add_or_update_item(item: Dict) -> Dict:
     """
     Add new item or update existing item.
     Returns: dict with 'serial', 'is_new' keys
     """
     items = load_store_items()
-    # Identify by name + hsn
-    name = item.get('name','').strip().lower()
-    hsn = str(item.get('hsn','')).strip()
-    
-    # Check if item exists
-    for i, it in enumerate(items):
-        if it.get('name','').strip().lower() == name and str(it.get('hsn','')).strip() == hsn:
-            # Update existing item (preserve serial)
-            serial = it.get('serial')
-            if not serial:
-                serial = get_next_serial(items)
-                it['serial'] = serial
-            items[i].update(item)
-            items[i]['serial'] = serial  # Ensure serial is preserved
+    # Enforce strict serial/name+HSN rules
+    name_raw = (item.get('name') or '').strip()
+    hsn_raw = str(item.get('hsn') or '').strip()
+
+    # If serial provided, update that serial only
+    provided_serial = item.get('serial')
+    if provided_serial is not None and str(provided_serial).strip() != '':
+        try:
+            s = int(provided_serial)
+        except Exception:
+            raise ValueError('Invalid serial number')
+
+        existing = get_item_by_serial(items, s)
+        if existing:
+            # Update allowed fields only
+            existing.update({
+                'name': name_raw or existing.get('name'),
+                'hsn': hsn_raw or existing.get('hsn'),
+                'mrp': float(item.get('mrp', existing.get('mrp'))),
+                'gst': float(item.get('gst', existing.get('gst'))),
+            })
             save_store_items(items)
-            return {'serial': serial, 'is_new': False, **items[i]}
-    
-    # Add new item with auto serial
+            return {'serial': s, 'is_new': False, **existing}
+        else:
+            # Serial provided but not found -> reject
+            raise KeyError(f"Serial {s} not found")
+
+    # No serial provided: check name+hsn dup prevention
+    dup = find_by_name_hsn(items, name_raw, hsn_raw)
+    if dup:
+        # Overwrite price/GST, keep serial
+        dup['mrp'] = float(item.get('mrp', dup.get('mrp')))
+        dup['gst'] = float(item.get('gst', dup.get('gst')))
+        save_store_items(items)
+        return {'serial': dup.get('serial'), 'is_new': False, **dup}
+
+    # Create new item and assign next serial
     serial = get_next_serial(items)
-    item['serial'] = serial
-    items.append(item)
+    new_item = {
+        'name': name_raw,
+        'hsn': hsn_raw,
+        'mrp': float(item.get('mrp', 0)),
+        'gst': float(item.get('gst', 0)),
+        'serial': serial
+    }
+    items.append(new_item)
     save_store_items(items)
-    return {'serial': serial, 'is_new': True, **item}
+    return {'serial': serial, 'is_new': True, **new_item}
 
 
 def find_items(term: str, limit: int = 10) -> List[Dict]:

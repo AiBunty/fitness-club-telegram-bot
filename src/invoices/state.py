@@ -1,0 +1,13 @@
+"""Conversation states for invoices."""
+
+ENTRY = 0
+SEARCH_USER = 1
+SELECT_USER = 2
+ITEM_NAME = 3
+ITEM_RATE = 4
+ITEM_QTY = 5
+ITEM_DISC = 6
+ITEM_AFTER = 7
+SHIPPING = 8
+CONFIRM_SEND = 9
+AWAIT_PAYMENT = 10

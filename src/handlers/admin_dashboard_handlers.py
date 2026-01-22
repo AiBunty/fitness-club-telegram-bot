@@ -16,14 +16,15 @@ from src.database.user_operations import (
 from src.utils.auth import is_admin
 from src.utils.message_templates import get_template, save_template
 from src.utils import event_registry
+from src.utils.state_management import clear_stale_states
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Conversation states for user management
-MANAGE_USER_MENU, SELECT_USER_ACTION, CONFIRM_DELETE, ENTER_BAN_REASON = range(4)
+# Conversation states for user management (high-range to avoid collisions)
+MANAGE_USER_MENU, SELECT_USER_ACTION, CONFIRM_DELETE, ENTER_BAN_REASON = range(5000, 5004)
 
 
 async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -54,6 +55,7 @@ async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
         [InlineKeyboardButton("👤 Manage Users", callback_data="admin_manage_users"),
          InlineKeyboardButton("📥 Excel Export", callback_data="admin_export_excel")],
+        [InlineKeyboardButton("🧾 Invoices", callback_data="cmd_invoices")],
         [InlineKeyboardButton("💰 Revenue Stats", callback_data="dashboard_revenue"),
          InlineKeyboardButton("📈 Engagement", callback_data="dashboard_engagement")],
         [InlineKeyboardButton("✏️ Message Templates", callback_data="admin_templates")]
@@ -383,21 +385,20 @@ async def cmd_member_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Select user for management operations - HIGHEST PRIORITY state"""
     query = update.callback_query
+
+    # Always answer callback immediately to avoid Telegram spinner
+    if query:
+        await query.answer()
     
     if not is_admin(query.from_user.id):
         await query.answer("❌ Admin access only.", show_alert=True)
         return
-    
-    await query.answer()
-    
+
     # CRITICAL: GLOBAL STATE RESET - Clear ALL active conversation states
-    # Prevents Invoice v2, Store, AR, or any other flows from intercepting User ID input
-    # This is HIGHEST PRIORITY: Admin Management must take precedence over all other flows
-    logger.info(f"[MANAGE_USERS] GLOBAL STATE RESET for admin {query.from_user.id}")
-    if context.user_data:
-        logger.info(f"[MANAGE_USERS] Clearing all active states: {list(context.user_data.keys())}")
-        context.user_data.clear()
-    
+    clear_stale_states(update, context, flow_name="manage_users")
+    # Explicitly drop shake/manual deduction payloads to avoid cross-talk
+    context.user_data.pop('shake_deduction', None)
+
     # CRITICAL: Explicitly set management marker to prevent state confusion
     context.user_data["is_in_management_flow"] = True
     
@@ -525,10 +526,9 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
     # Management buttons
     keyboard = [
         [InlineKeyboardButton("🚫 Ban User" if not is_banned else "✅ Unban User", 
-                              callback_data="manage_toggle_ban")],
-        [InlineKeyboardButton("🗑️ Delete User", callback_data="manage_delete_user")],
+                              callback_data="mng_usr_toggle_ban")],
+        [InlineKeyboardButton("🗑️ Delete User", callback_data="mng_usr_delete")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_manage_users_back")]
-    ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -652,8 +652,8 @@ async def callback_delete_user(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("✅ Yes, Delete", callback_data="confirm_delete_user"),
-         InlineKeyboardButton("❌ Cancel", callback_data="admin_manage_users_back")]
+        [InlineKeyboardButton("✅ Yes, Delete", callback_data="mng_usr_confirm_delete"),
+         InlineKeyboardButton("❌ Cancel", callback_data="mng_usr_cancel_delete")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -869,13 +869,13 @@ def get_manage_users_conversation_handler():
                 CallbackQueryHandler(cmd_manage_users, pattern="^admin_manage_users$"),
             ],
             SELECT_USER_ACTION: [
-                CallbackQueryHandler(callback_toggle_ban, pattern="^manage_toggle_ban$"),
-                CallbackQueryHandler(callback_delete_user, pattern="^manage_delete_user$"),
+                CallbackQueryHandler(callback_toggle_ban, pattern="^mng_usr_toggle_ban$"),
+                CallbackQueryHandler(callback_delete_user, pattern="^mng_usr_delete$"),
                 CallbackQueryHandler(cmd_manage_users, pattern="^admin_manage_users_back$"),
             ],
             CONFIRM_DELETE: [
-                CallbackQueryHandler(callback_confirm_delete, pattern="^confirm_delete_user$"),
-                CallbackQueryHandler(cmd_manage_users, pattern="^admin_dashboard_menu$"),
+                CallbackQueryHandler(callback_confirm_delete, pattern="^mng_usr_confirm_delete$"),
+                CallbackQueryHandler(cmd_manage_users, pattern="^mng_usr_cancel_delete$"),
             ],
             ENTER_BAN_REASON: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ban_reason_input),
@@ -885,8 +885,10 @@ def get_manage_users_conversation_handler():
             CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$"),
             CommandHandler('cancel', lambda u, c: ConversationHandler.END)
         ],
-        conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
+        conversation_timeout=300,  # 5 minute timeout to prevent stuck states
+        allow_reentry=True,
         per_message=False,
         per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
-        per_user=True   # CRITICAL: Isolate per user for admin concurrency
+        per_user=True,  # CRITICAL: Isolate per user for admin concurrency
+        name="management_flow"
     )

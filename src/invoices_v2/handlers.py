@@ -82,21 +82,17 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"[INVOICE_V2] entry_point callback_received admin={admin_id} callback_data={query.data}")
     else:
         logger.info(f"[INVOICE_V2] entry_point command_received admin={admin_id}")
+
+    # CRITICAL: Clear any stale states before starting Invoice flow
+    # NOTE: Do NOT call clear_stale_states() as it returns ConversationHandler.END and kills this flow!
+    # Instead, manually clear user_data and continue
+    if context.user_data:
+        logger.info(f"[INVOICE_V2] Clearing stale states: {list(context.user_data.keys())}")
+        context.user_data.clear()
     
     if not is_admin(admin_id):
         await update.effective_user.send_message("❌ Admin access required")
         return ConversationHandler.END
-    
-    # CRITICAL: Clear ALL previous states to prevent cross-talk
-    # This prevents abandoned Store/User/AR flows from interfering
-    if context.user_data:
-        logger.info(f"[INVOICE_V2] clearing_zombie_states keys={list(context.user_data.keys())}")
-        context.user_data.clear()
-    
-    # CRITICAL: Mark as invoice flow (and remove management flag if set)
-    context.user_data["invoice_v2_data"] = {
-        "is_in_management_flow": False  # Explicitly mark NOT in management flow
-    }
     
     logger.info(f"[INVOICE_V2] entry_point_success admin={admin_id}")
     
@@ -128,6 +124,9 @@ async def search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Prompt admin to search for user"""
     query = update.callback_query
     admin_id = query.from_user.id if query else update.effective_user.id
+    
+    if query:
+        await query.answer()
     
     logger.info(f"[INVOICE_V2] search_user_start admin={admin_id}")
     
@@ -184,6 +183,8 @@ async def handle_user_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     admin_id = query.from_user.id
     
+    await query.answer()
+    
     # Extract index from callback_data
     callback_data = query.data  # inv2_select_user_0, inv2_select_user_1, etc.
     index = int(callback_data.split("_")[-1])
@@ -222,6 +223,8 @@ async def handle_item_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handle item mode selection (search or custom)"""
     query = update.callback_query
     data = query.data
+    
+    await query.answer()
     
     if data == "inv2_search_store":
         await query.edit_message_text("🔍 Search item by *NAME* or *SERIAL NUMBER*:", parse_mode="Markdown")
@@ -282,6 +285,8 @@ async def handle_store_search(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_store_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle store item selection"""
     query = update.callback_query
+    
+    await query.answer()
     
     if query.data == "inv2_cancel":
         await query.edit_message_text("❌ Invoice cancelled.")
@@ -443,6 +448,8 @@ async def handle_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
+    await query.answer()
+    
     current_item = context.user_data["invoice_v2_current_item"]
     
     if data == "inv2_item_add_more":
@@ -545,6 +552,8 @@ async def handle_send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Generate and send invoice"""
     query = update.callback_query
     admin_id = query.from_user.id
+    
+    await query.answer()
     
     if query.data == "inv2_cancel":
         await query.edit_message_text("❌ Invoice cancelled.")
@@ -656,6 +665,7 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """Handle cancel at any point"""
     query = update.callback_query
     if query:
+        await query.answer()
         await query.edit_message_text("❌ Invoice cancelled.")
     else:
         await update.effective_user.send_message("❌ Cancelled.")
@@ -672,12 +682,12 @@ async def handle_pay_bill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     
+    await query.answer()
+    
     # Extract invoice_id from callback_data: inv2_pay_{invoice_id}
     invoice_id = query.data.split("_")[-1]
     
     logger.info(f"[INVOICE_V2] user_pay_clicked invoice_id={invoice_id} user_id={user_id}")
-    
-    await query.answer()
     
     # Find invoice
     invoices = load_invoices()
@@ -713,12 +723,12 @@ async def handle_reject_bill(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     user_id = query.from_user.id
     
+    await query.answer()
+    
     # Extract invoice_id from callback_data: inv2_reject_{invoice_id}
     invoice_id = query.data.split("_")[-1]
     
     logger.info(f"[INVOICE_V2] user_reject_clicked invoice_id={invoice_id} user_id={user_id}")
-    
-    await query.answer()
     
     # Find invoice
     invoices = load_invoices()

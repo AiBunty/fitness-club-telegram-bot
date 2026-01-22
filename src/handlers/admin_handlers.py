@@ -999,8 +999,8 @@ async def cmd_pending_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== MANUAL SHAKE DEDUCTION ====================
 
-# Conversation states
-MANUAL_SHAKE_SELECT_USER, MANUAL_SHAKE_ENTER_AMOUNT, MANUAL_SHAKE_CONFIRM = range(3)
+# Conversation states (keep isolated from admin dashboard high-range states)
+MANUAL_SHAKE_SELECT_USER, MANUAL_SHAKE_ENTER_AMOUNT, MANUAL_SHAKE_CONFIRM = range(3000, 3003)
 
 
 async def cmd_manual_shake_deduction(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1130,7 +1130,8 @@ def get_manual_shake_deduction_handler():
             MANUAL_SHAKE_ENTER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_shake_enter_amount)],
             MANUAL_SHAKE_CONFIRM: [CallbackQueryHandler(manual_shake_confirm, pattern="^manual_shake_")]
         },
-        fallbacks=[CommandHandler('cancel', cancel_registration)]
+        fallbacks=[CommandHandler('cancel', cancel_registration)],
+        name="shake_flow"
     )
 
 

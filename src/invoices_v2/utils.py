@@ -6,8 +6,9 @@ import os
 from typing import Dict, List, Optional
 
 
-USERS_FILE = "data/users.json"
+USERS_FILE = None
 GST_CONFIG_FILE = "data/gst_config.json"
+from src.utils.user_registry import load_registry, search_registry
 
 
 def ensure_gst_config():
@@ -35,10 +36,10 @@ def get_gst_config() -> Dict:
 
 def load_users() -> List[Dict]:
     """Load user registry"""
+    # Delegate to central user_registry for consistency
     try:
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    except:
+        return load_registry()
+    except Exception:
         return []
 
 
@@ -48,44 +49,8 @@ def search_users(query: str, limit: int = 10) -> List[Dict]:
     - Partial, case-insensitive match on name/username
     - Exact numeric match on telegram_id
     """
-    users = load_users()
-    
-    # Try exact telegram_id match first
-    try:
-        user_id = int(query)
-        for user in users:
-            if user.get("telegram_id") == user_id:
-                return [user]
-    except ValueError:
-        pass
-    
-    # Text search: name/username (case-insensitive)
-    query_lower = query.lower()
-    results = []
-    
-    for user in users:
-        # Check first_name
-        if query_lower in user.get("first_name", "").lower():
-            results.append(user)
-            continue
-        
-        # Check last_name
-        if query_lower in user.get("last_name", "").lower():
-            results.append(user)
-            continue
-        
-        # Check full_name
-        if query_lower in user.get("full_name", "").lower():
-            results.append(user)
-            continue
-        
-        # Check username (strip @)
-        username = user.get("username", "").lstrip("@").lower()
-        if query_lower in username:
-            results.append(user)
-            continue
-    
-    return results[:limit]
+    # Delegate search to user_registry to ensure single source of truth
+    return search_registry(query, limit=limit)
 
 
 def format_user_display(user: Dict) -> str:
@@ -93,7 +58,7 @@ def format_user_display(user: Dict) -> str:
     first = user.get("first_name", "")
     last = user.get("last_name", "")
     username = user.get("username", "")
-    uid = user.get("telegram_id", "?")
+    uid = user.get("telegram_id") or user.get('user_id') or "?"
     
     name = f"{first} {last}".strip()
     user_str = f"@{username}" if username else str(uid)
