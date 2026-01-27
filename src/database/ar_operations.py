@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional, Tuple
+from src.config import USE_LOCAL_DB, USE_REMOTE_DB
 from src.database.connection import execute_query, get_db_cursor
 
 logger = logging.getLogger(__name__)
@@ -21,15 +22,17 @@ def create_receivable(user_id: int, receivable_type: str, source_id: Optional[in
 
 def create_transactions(receivable_id: int, lines: List[Dict[str, Any]], admin_user_id: Optional[int]) -> int:
     """Insert multiple transaction lines atomically. Returns count inserted."""
+    placeholder = '?' if USE_LOCAL_DB and not USE_REMOTE_DB else '%s'
+    sql = (
+        f"INSERT INTO ar_transactions (receivable_id, method, amount, reference, created_by) "
+        f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+    )
     with get_db_cursor() as cursor:
         for line in lines:
             method = str(line.get('method')).lower()
             amount = float(line.get('amount'))
             reference = line.get('reference')
-            cursor.execute(
-                "INSERT INTO ar_transactions (receivable_id, method, amount, reference, created_by) VALUES (%s, %s, %s, %s, %s)",
-                (receivable_id, method, amount, reference, admin_user_id)
-            )
+            cursor.execute(sql, (receivable_id, method, amount, reference, admin_user_id))
         return len(lines)
 
 
@@ -56,7 +59,7 @@ def update_receivable_status(receivable_id: int) -> Dict[str, Any]:
         new_status = 'partial'
     else:
         new_status = 'paid'
-    row = execute_query("UPDATE accounts_receivable SET status=%s, updated_at=NOW() WHERE receivable_id=%s RETURNING *",
+    row = execute_query("UPDATE accounts_receivable SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE receivable_id=%s RETURNING *",
                         (new_status, receivable_id), fetch_one=True)
     return row or {}
 

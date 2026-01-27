@@ -29,16 +29,28 @@ def authenticate_admin(user_id: int, password: str) -> bool:
     return True
 
 def is_admin(user_id: int) -> bool:
-    """Check if user is an admin by role in database or super admin"""
-    return is_admin_db(user_id) or is_super_admin(user_id)
+    """Check if user is an admin by role in database or super admin
+    Falls back to ADMIN_IDS environment variable if database is unavailable"""
+    try:
+        return is_admin_db(user_id) or is_super_admin(user_id)
+    except Exception as e:
+        # Fall back to environment variable in local/offline mode
+        logger.debug(f"Database role check failed ({e}), falling back to ADMIN_IDS env var")
+        return user_id in ADMIN_IDS or is_super_admin(user_id)
 
 def is_admin_id(user_id: int) -> bool:
     """Alias for is_admin() for backward compatibility"""
     return is_admin(user_id)
 
 def is_staff(user_id: int) -> bool:
-    """Check if user is staff or admin"""
-    return is_staff_db(user_id) or is_admin(user_id)
+    """Check if user is staff or admin
+    Falls back to STAFF_IDS environment variable if database is unavailable"""
+    try:
+        return is_staff_db(user_id) or is_admin(user_id)
+    except Exception as e:
+        # Fall back to environment variable in local/offline mode
+        logger.debug(f"Database staff check failed ({e}), falling back to STAFF_IDS env var")
+        return user_id in STAFF_IDS or is_admin(user_id)
 
 def logout_admin(user_id: int) -> None:
     """Logout admin session."""

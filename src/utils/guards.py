@@ -9,6 +9,25 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.database.user_operations import user_exists, get_user_approval_status
+from src.config import USE_LOCAL_DB
+
+# Local-mode fallbacks to avoid remote DB access during tests
+def _user_exists(user_id: int) -> bool:
+    if USE_LOCAL_DB:
+        try:
+            # user_registry removed - database is single source of truth
+            # If not in DB, user doesn't exist
+            return False
+        except Exception:
+            return False
+    return user_exists(user_id)
+
+
+def _get_user_approval_status(user_id: int) -> str:
+    if USE_LOCAL_DB:
+        # Local registry doesn't track approval; assume approved for local testing
+        return 'approved'
+    return get_user_approval_status(user_id)
 from src.utils.auth import is_admin_id
 
 logger = logging.getLogger(__name__)
@@ -21,7 +40,7 @@ async def check_registration(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     user_id = update.effective_user.id
     
-    if not user_exists(user_id):
+    if not _user_exists(user_id):
         if update.callback_query:
             await update.callback_query.answer(
                 "❌ You must register first. Use /register",
@@ -45,7 +64,7 @@ async def check_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     
     # Check if registered first
-    if not user_exists(user_id):
+    if not _user_exists(user_id):
         if update.callback_query:
             await update.callback_query.answer(
                 "❌ You must register first. Use /register",
@@ -59,7 +78,7 @@ async def check_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return False
     
     # Check approval status
-    approval_status = get_user_approval_status(user_id)
+    approval_status = _get_user_approval_status(user_id)
     
     if approval_status == 'rejected':
         if update.callback_query:

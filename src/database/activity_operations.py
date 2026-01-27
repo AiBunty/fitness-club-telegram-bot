@@ -36,11 +36,21 @@ def get_today_log(user_id: int):
 
 def get_yesterday_weight(user_id: int):
     """Get user's weight from yesterday for comparison"""
-    query = """
-        SELECT weight FROM daily_logs 
-        WHERE user_id = %s AND log_date = CURRENT_DATE - INTERVAL '1 day'
-        AND weight IS NOT NULL
-    """
+    from src.config import USE_LOCAL_DB
+    if USE_LOCAL_DB:
+        # SQLite syntax
+        query = """
+            SELECT weight FROM daily_logs 
+            WHERE user_id = ? AND log_date = date('now', '-1 day')
+            AND weight IS NOT NULL
+        """
+    else:
+        # PostgreSQL syntax
+        query = """
+            SELECT weight FROM daily_logs 
+            WHERE user_id = %s AND log_date = CURRENT_DATE - INTERVAL '1 day'
+            AND weight IS NOT NULL
+        """
     result = execute_query(query, (user_id,), fetch_one=True)
     return result['weight'] if result else None
 

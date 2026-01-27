@@ -17,6 +17,7 @@ from src.utils.role_notifications import get_moderator_chat_ids
 from src.database.user_operations import get_user
 from src.utils.auth import is_admin_id
 from src.utils.callback_utils import safe_answer_callback_query
+from src.utils.access_gate import check_app_feature_access
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /store command - Open store (handles both command and callback)
     """
+    # Full access required for store
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
     user_id = update.effective_user.id
     user = get_user(user_id)
     
@@ -83,6 +87,8 @@ async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def store_select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Category selected - show products"""
+    if not await check_app_feature_access(update, context):
+        return SELECTING_CATEGORY
     query = update.callback_query
     await query.answer()
     
@@ -170,6 +176,8 @@ async def _show_product(query_or_message, context: ContextTypes.DEFAULT_TYPE, in
 
 async def store_add_to_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add product to cart"""
+    if not await check_app_feature_access(update, context):
+        return VIEWING_PRODUCT
     query = update.callback_query
     
     parts = query.data.split(":")
@@ -202,6 +210,8 @@ async def store_add_to_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def store_view_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View shopping cart"""
+    if not await check_app_feature_access(update, context):
+        return CART_REVIEW
     query = update.callback_query
     await query.answer()
     
@@ -293,6 +303,8 @@ async def cart_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def store_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start checkout - select payment method"""
+    if not await check_app_feature_access(update, context):
+        return CHECKOUT_METHOD
     query = update.callback_query
     await query.answer()
     
@@ -322,6 +334,8 @@ async def store_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def store_process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process checkout with selected payment method"""
+    if not await check_app_feature_access(update, context):
+        return CHECKOUT_METHOD
     query = update.callback_query
     await query.answer()
     

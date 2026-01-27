@@ -16,18 +16,22 @@ ENV = os.getenv('ENV', 'local')
 if USE_LOCAL_DB and USE_REMOTE_DB:
     raise RuntimeError("Config error: USE_LOCAL_DB and USE_REMOTE_DB cannot both be true")
 
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8517722262:AAHhE7y3ifKUIHz-JzmHyZ-miR5MJD5PPPY')
-SUPER_ADMIN_PASSWORD = os.getenv('SUPER_ADMIN_PASSWORD', 'ChangeMe123!')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or ''
+
+# In local/test mode, we still need the bot token to run polling
+# Commented out to allow bot to run with local DB
+# if USE_LOCAL_DB:
+#     TELEGRAM_BOT_TOKEN = ''
+SUPER_ADMIN_PASSWORD = os.getenv('SUPER_BOT_PASSWORD', 'ChangeMe123!')
 SUPER_ADMIN_USER_ID = os.getenv('SUPER_ADMIN_USER_ID', '0')
 
 # Database config only used when USE_REMOTE_DB is True
 DATABASE_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('DB_PORT', '5432')),
+    'port': int(os.getenv('DB_PORT', '3306')),
     'database': os.getenv('DB_NAME', 'fitness_club_db'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', ''),
-    'sslmode': os.getenv('DB_SSLMODE', 'require')
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASS', os.getenv('DB_PASSWORD', '')),
 }
 
 # Data directory and canonical file paths (local-only sources)

@@ -493,54 +493,56 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
                 final_amount=total_amount
             )
             
-            if receivable:
-                # Schedule payment reminders immediately
-                if context and getattr(context, 'application', None):
-                    schedule_followups(
-                        context.application, user_id, 'PAYMENT_REMINDER_1',
-                        {'name': query.from_user.full_name, 'amount': total_amount}
-                    )
-                    logger.info(f"Payment reminders scheduled for pay later credit: User {user_id}, Amount {total_amount}")
-            
-            # Notify admins about pay later request
-            try:
-                from src.handlers.admin_handlers import get_admin_ids
+
+                if success:
+                    # Schedule reminders if balance > 0 (48 hours from now)
+                    if balance > 0:
+                        from src.utils.event_dispatcher import schedule_followups
+                        from datetime import datetime, timedelta
                 
-                admin_ids = get_admin_ids()
-                user_data = get_user(user_id)
-                profile_pic_url = user_data.get('profile_pic_url') if user_data else None
-                
-                admin_caption = (
-                    f"*⏳ Pay Later (Credit) Request - Admin Review*\n\n"
-                    f"User: {query.from_user.full_name} (ID: {user_id})\n"
-                    f"Plan: {plan['name']}\n"
-                    f"Amount: Rs. {total_amount:,}\n"
-                    f"Payment Method: ⏳ Pay Later (Credit)\n\n"
-                    f"Request ID: {sub_request['id']}\n"
-                    f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
-                    f"*Status:* Credit activated. Full amount outstanding.\n"
-                    f"User will receive payment reminders."
-                )
-                
-                admin_keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_credit_{sub_request['id']}"),
-                        InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_credit_{sub_request['id']}"),
-                    ]
-                ]
-                admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
-                
-                for admin_id in admin_ids:
-                    try:
-                        if profile_pic_url:
-                            await context.bot.send_photo(
-                                chat_id=admin_id,
-                                photo=profile_pic_url,
-                                caption=admin_caption,
-                                reply_markup=admin_reply_markup,
-                                parse_mode="Markdown"
+                        reminder_time = datetime.now() + timedelta(hours=48)
+                        if context and getattr(context, 'application', None):
+                            schedule_followups(
+                                context.application,
+                                user_id,
+                                'PAYMENT_REMINDER_1',
+                                {
+                                    'amount_due': balance,
+                                    'due_in_hours': 48,
+                                },
+                                reminder_time,
                             )
-                        else:
+
+                    # Notify user
+                    try:
+                        end_date_str = end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'
+                        message = (
+                            f"✅ *Subscription Approved!*\n\n"
+                            f"Plan: {request_details.get('plan_id', 'N/A')}\n"
+                            f"Amount: Rs. {final_bill:,}\n"
+                            f"UPI Received: Rs. {upi_received:,}\n"
+                            f"Cash Received: Rs. {cash_received:,}\n"
+                            f"Balance: Rs. {balance:,}\n"
+                            f"Valid Until: {end_date_str}\n\n"
+                            f"Your subscription is now active! 🎉"
+                        )
+                        await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                        logger.info(f"Approval notification sent to user {user_id}")
+                    except Exception as e:
+                        logger.debug(f"Could not send approval notification to user: {e}")
+            
+                    # Update UI
+                    await query.edit_message_text(
+                        f"✅ Subscription Approved!\n\n"
+                        f"Final Bill: Rs. {final_bill:,}\n"
+                        f"UPI Received: Rs. {upi_received:,}\n"
+                        f"Cash Received: Rs. {cash_received:,}\n"
+                        f"Balance: Rs. {balance:,}\n"
+                        f"Valid Until: {end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'}\n\n"
+                        f"Reminders scheduled for outstanding balance."
+                    )
+            
+                    return ConversationHandler.END
                             await context.bot.send_message(
                                 chat_id=admin_id,
                                 text=admin_caption,
@@ -888,56 +890,56 @@ async def cmd_my_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE
         now = datetime.now()
         days_remaining = (sub['end_date'] - now).days
         plan = SUBSCRIPTION_PLANS.get(sub['plan_id'], {})
-        
-        if days_remaining < 0:
-            status = "⏰ *Expired*"
-        elif days_remaining <= 2:
-            status = "⚠️ *Expiring Soon*"
-        else:
-            status = "✅ *Active*"
-        
-        message = (
-            f"{status}\n\n"
-            f"Plan: {plan.get('name', 'Unknown')}\n"
-            f"Amount: Rs. {sub['amount']:,}\n"
-            f"Start Date: {sub['start_date'].strftime('%d-%m-%Y')}\n"
-            f"End Date: {sub['end_date'].strftime('%d-%m-%Y')}\n"
-            f"Days Remaining: {max(0, days_remaining)}\n\n"
-        )
-        
-        if days_remaining <= 0:
-            message += "Your subscription has expired. Use /subscribe to renew."
-        
-        await update.message.reply_text(message, parse_mode="Markdown")
-        return
-    
-    # Check for pending subscription request
-    pending = get_user_pending_subscription_request(user_id)
-    
-    if pending:
-        plan = SUBSCRIPTION_PLANS.get(pending['plan_id'], {})
-        await update.message.reply_text(
-            f"⏳ *Subscription Request Pending*\n\n"
-            f"Plan: {plan.get('name', 'Unknown')}\n"
-            f"Amount: Rs. {pending['amount']:,}\n"
-            f"Status: Awaiting Admin Approval\n"
-            f"Payment Method: {pending.get('payment_method', 'Pending')}\n\n"
-            f"Our admin will review your request soon.",
-            parse_mode="Markdown"
-        )
-        return
-    
-    # No active subscription and no pending request
-    await update.message.reply_text(
-        "❌ *No Active Subscription*\n\n"
-        "Use /subscribe to purchase a subscription plan.",
-        parse_mode="Markdown"
-    )
 
+        if success:
+            # Schedule reminders if balance > 0 (48 hours from now)
+            if balance > 0:
+                from src.utils.event_dispatcher import schedule_followups
+                from datetime import datetime, timedelta
+                
+                reminder_time = datetime.now() + timedelta(hours=48)
+                if context and getattr(context, 'application', None):
+                    schedule_followups(
+                        context.application,
+                        user_id,
+                        'PAYMENT_REMINDER_1',
+                        {
+                            'amount_due': balance,
+                            'due_in_hours': 48,
+                        },
+                        reminder_time,
+                    )
 
-async def cmd_admin_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: View pending subscriptions"""
-    if not is_admin(update.effective_user.id):
+            # Notify user
+            try:
+                end_date_str = end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'
+                message = (
+                    f"✅ *Subscription Approved!*\n\n"
+                    f"Plan: {request_details.get('plan_id', 'N/A')}\n"
+                    f"Amount: Rs. {final_bill:,}\n"
+                    f"UPI Received: Rs. {upi_received:,}\n"
+                    f"Cash Received: Rs. {cash_received:,}\n"
+                    f"Balance: Rs. {balance:,}\n"
+                    f"Valid Until: {end_date_str}\n\n"
+                    f"Your subscription is now active! 🎉"
+                )
+                await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                logger.info(f"Approval notification sent to user {user_id}")
+            except Exception as e:
+                logger.debug(f"Could not send approval notification to user: {e}")
+            
+            # Update UI
+            await query.edit_message_text(
+                f"✅ Subscription Approved!\n\n"
+                f"Final Bill: Rs. {final_bill:,}\n"
+                f"UPI Received: Rs. {upi_received:,}\n"
+                f"Cash Received: Rs. {cash_received:,}\n"
+                f"Balance: Rs. {balance:,}\n"
+                f"Valid Until: {end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'}\n\n"
+                f"Reminders scheduled for outstanding balance."
+            )
+            
+            return ConversationHandler.END
         await update.message.reply_text("❌ Admin access only.")
         return
     
@@ -1906,28 +1908,38 @@ async def callback_admin_final_confirm(update: Update, context: ContextTypes.DEF
         end_date = context.user_data.get('selected_end_date')
         
         # Approve subscription with final bill amount
-        from src.database.subscription_operations import approve_subscription
-        success = approve_subscription(request_id, final_bill, end_date)
-        
+        from src.database.subscription_operations import (
+            approve_subscription,
+            get_pending_payment,
+            finalize_pending_payment,
+        )
+
+        payment_lines = []
+        user_id = request_details['user_id']
+
+        if upi_received > 0:
+            pending = get_pending_payment(request_id, 'upi')
+            if pending and pending.get('id'):
+                finalize_pending_payment(pending['id'], reference=pending.get('reference'))
+            else:
+                payment_lines.append({'method': 'upi', 'amount': upi_received, 'reference': None})
+
+        if cash_received > 0:
+            pending_cash = get_pending_payment(request_id, 'cash')
+            if pending_cash and pending_cash.get('id'):
+                finalize_pending_payment(pending_cash['id'], reference=pending_cash.get('reference'))
+            else:
+                payment_lines.append({'method': 'cash', 'amount': cash_received, 'reference': None})
+
+        success = approve_subscription(
+            request_id,
+            final_bill,
+            end_date,
+            payment_lines=payment_lines,
+            admin_user_id=query.from_user.id,
+        )
+
         if success:
-            # Update AR ledger with actual amounts; prefer finalizing any pending evidence
-            from src.database.subscription_operations import get_pending_payment, finalize_pending_payment
-            from src.database.ar_operations import record_payment
-            user_id = request_details['user_id']
-
-            if upi_received > 0:
-                pending = get_pending_payment(request_id, 'upi')
-                if pending and pending.get('id'):
-                    finalize_pending_payment(pending['id'], reference=pending.get('reference'))
-                else:
-                    record_payment(user_id, 'subscription', request_id, upi_received, 'upi')
-            if cash_received > 0:
-                pending_cash = get_pending_payment(request_id, 'cash')
-                if pending_cash and pending_cash.get('id'):
-                    finalize_pending_payment(pending_cash['id'], reference=pending_cash.get('reference'))
-                else:
-                    record_payment(user_id, 'subscription', request_id, cash_received, 'cash')
-
             # Schedule reminders if balance > 0 (48 hours from now)
             if balance > 0:
                 from src.utils.event_dispatcher import schedule_followups
@@ -2052,7 +2064,21 @@ async def callback_approve_with_date_old(update: Update, context: ContextTypes.D
             return ConversationHandler.END
         
         # Approve the subscription
-        success = approve_subscription(request_id, amount, end_date)
+        payment_lines = [
+            {
+                'method': payment_method or 'cash',
+                'amount': amount,
+                'reference': None,
+            }
+        ]
+
+        success = approve_subscription(
+            request_id,
+            amount,
+            end_date,
+            payment_lines=payment_lines,
+            admin_user_id=query.from_user.id,
+        )
         
         if success:
             # Also mark user as approved (in case they were pending)
@@ -2198,7 +2224,9 @@ async def callback_approve_sub_standard(update: Update, context: ContextTypes.DE
     plan = SUBSCRIPTION_PLANS.get(sub['plan_id'], {})
     end_date = datetime.now() + timedelta(days=plan['duration_days'])
     
-    if approve_subscription(sub_id, sub['amount'], end_date):
+    payment_lines = [{'method': 'cash', 'amount': sub['amount'], 'reference': None}]
+
+    if approve_subscription(sub_id, sub['amount'], end_date, payment_lines=payment_lines, admin_user_id=query.from_user.id):
         await query.answer()
         
         # Notify user
@@ -2399,7 +2427,9 @@ async def callback_select_end_date(update: Update, context: ContextTypes.DEFAULT
         await query.answer()
         
         # Try to approve subscription
-        if approve_subscription(sub_id, amount, end_date):
+        payment_lines = [{'method': 'cash', 'amount': amount, 'reference': None}]
+
+        if approve_subscription(sub_id, amount, end_date, payment_lines=payment_lines, admin_user_id=query.from_user.id):
             # Send payment receipt to user
             receipt_message = (
                 "✅ *Payment Received & Approved!*\n\n"

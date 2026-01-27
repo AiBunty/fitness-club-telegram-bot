@@ -12,6 +12,7 @@ from src.database.user_operations import get_user
 from src.database.shake_credits_operations import (
     approve_purchase, reject_purchase, get_pending_purchase_requests, get_user_credits
 )
+from src.utils.access_gate import check_app_feature_access
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user statistics"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -119,6 +122,8 @@ async def callback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Checkin attendance"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -158,6 +163,8 @@ async def callback_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_shake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show shake flavor selection"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -187,6 +194,8 @@ async def callback_shake(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_select_flavor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle shake flavor selection"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     user_id = update.effective_user.id
     
@@ -237,6 +246,8 @@ async def callback_select_flavor(update: Update, context: ContextTypes.DEFAULT_T
 
 async def callback_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show top members leaderboard"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -261,6 +272,8 @@ async def callback_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def callback_log_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show activity logging options"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -281,6 +294,8 @@ async def callback_log_activity(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def callback_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show settings menu"""
+    if not await check_app_feature_access(update, context):
+        return
     query = update.callback_query
     await query.answer()
     
@@ -300,6 +315,8 @@ async def callback_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Return to main menu"""
+    if not await check_app_feature_access(update, context):
+        return
     await show_main_menu(update, context)
 
 # Callback handler router
@@ -359,12 +376,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_notifications":
         await cmd_notifications(update, context)
     elif query.data == "cmd_invoices":
+        if not await verify_admin_access(update, context):
+            return
         from src.invoices.handlers import invoice_entry
         await invoice_entry(update, context)
     elif query.data.startswith('inv_admin_resend_'):
+        if not await verify_admin_access(update, context):
+            return
         from src.invoices.handlers import admin_resend_invoice
         await admin_resend_invoice(update, context)
     elif query.data.startswith('inv_admin_delete_'):
+        if not await verify_admin_access(update, context):
+            return
         from src.invoices.handlers import admin_delete_invoice
         await admin_delete_invoice(update, context)
     elif query.data.startswith('inv_paid_'):
@@ -428,11 +451,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_whoami":
         await cmd_whoami(update, context)
     elif query.data == "cmd_pending_attendance":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_pending_attendance(update, context)
     elif query.data == "cmd_pending_shakes":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_pending_shakes(update, context)
     elif query.data == "cmd_reports_menu":
         # Route to analytics dashboard
+        if not await verify_admin_access(update, context):
+            return
         await cmd_admin_dashboard(update, context)
     # NOTE: cmd_invoices is handled by Invoice v2 ConversationHandler (not here)
     # CRITICAL FALLBACK: If invoice callback reaches here, log error for diagnosis
@@ -464,32 +493,79 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
     elif query.data == "cmd_admin_dashboard":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_admin_dashboard(update, context)
     elif query.data == "cmd_gst_settings":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_gst_settings(update, context)
     elif query.data in ("gst_toggle_on","gst_toggle_off"):
+        if not await verify_admin_access(update, context):
+            return
         await gst_toggle(update, context)
     elif query.data == "gst_change_mode":
+        if not await verify_admin_access(update, context):
+            return
         await gst_change_mode(update, context)
     elif query.data == "gst_edit_percent":
+        if not await verify_admin_access(update, context):
+            return
         await gst_edit_percent_prompt(update, context)
     elif query.data == "cmd_create_store_items":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_create_store_items(update, context)
     elif query.data == "store_create_item":
+        if not await verify_admin_access(update, context):
+            return
         await store_create_item_prompt(update, context)
     elif query.data == "store_bulk_upload":
+        if not await verify_admin_access(update, context):
+            return
         await store_bulk_upload_prompt(update, context)
+    elif query.data == "store_download_sample":
+        if not await verify_admin_access(update, context):
+            return
+        await store_bulk_upload_prompt(update, context)
+    elif query.data == "store_download_existing":
+        from src.handlers.admin_gst_store_handlers import store_download_existing
+        if not await verify_admin_access(update, context):
+            return
+        await store_download_existing(update, context)
+    elif query.data.startswith("confirm_delete_"):
+        from src.handlers.admin_gst_store_handlers import confirm_delete_item
+        if not await verify_admin_access(update, context):
+            return
+        await confirm_delete_item(update, context)
+    elif query.data.startswith("edit_field_"):
+        from src.handlers.admin_gst_store_handlers import prompt_edit_value
+        if not await verify_admin_access(update, context):
+            return
+        await prompt_edit_value(update, context)
     elif query.data.startswith("store_select_"):
+        if not await verify_admin_access(update, context):
+            return
         await store_item_select_callback(update, context)
     elif query.data == "admin_manage_staff":
+        if not await verify_admin_access(update, context):
+            return
         await show_manage_staff_submenu(update, context)
     elif query.data == "admin_manage_admins":
+        if not await verify_admin_access(update, context):
+            return
         await show_manage_admins_submenu(update, context)
     elif query.data == "cmd_add_staff":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_add_staff(update, context)
     elif query.data == "cmd_remove_staff":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_remove_staff(update, context)
     elif query.data == "cmd_list_staff":
+        if not await verify_admin_access(update, context):
+            return
         await cmd_list_staff(update, context)
     elif query.data == "cmd_add_admin":
         await cmd_add_admin(update, context)

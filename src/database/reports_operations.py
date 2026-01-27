@@ -65,10 +65,10 @@ def get_active_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching active members: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -128,10 +128,10 @@ def get_inactive_members(limit: Optional[int] = None) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching inactive members: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
@@ -186,10 +186,10 @@ def get_expiring_soon_members(days: int = 7) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching expiring members: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -285,10 +285,10 @@ def get_member_daily_activity(date: Optional[datetime] = None) -> List[Dict[str,
         logger.error(f"Error fetching member daily activity: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
@@ -368,10 +368,10 @@ def get_top_performers(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching top performers: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
@@ -444,10 +444,10 @@ def get_inactive_users(days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching inactive users: {e}")
         return []
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def move_expired_to_inactive() -> int:
@@ -492,10 +492,10 @@ def move_expired_to_inactive() -> int:
             conn.rollback()
         return 0
     finally:
-        # FIX: Ensure connection is returned to the pool for scalability
+        # Ensure connection is returned to the pool safely (no-op in local mode)
         if conn:
-            from src.database.connection import DatabaseConnectionPool
-            DatabaseConnectionPool().get_pool().putconn(conn)
+            from src.database.connection import release_connection
+            release_connection(conn)
 
 
 def get_membership_stats() -> Dict[str, Any]:

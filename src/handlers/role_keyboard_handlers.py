@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from src.utils.auth import is_admin_id, is_staff
 from src.database.user_operations import user_exists
 from src.database.subscription_operations import is_subscription_active, is_in_grace_period
+from src.utils.access_gate import get_user_access_state, check_access_gate, STATE_NEW_USER, STATE_REGISTERED_NO_SUBSCRIPTION, STATE_EXPIRED_SUBSCRIBER, STATE_ACTIVE_SUBSCRIBER
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("📈 Dashboard", callback_data="cmd_admin_dashboard")],
     [InlineKeyboardButton("📊 Reports & Analytics", callback_data="cmd_reports_menu")],
     [InlineKeyboardButton("📢 Broadcast", callback_data="cmd_broadcast")],
+    [InlineKeyboardButton("📝 Edit Welcome Message", callback_data="cmd_edit_welcome_message")],
     [InlineKeyboardButton("🤖 Follow-up Settings", callback_data="cmd_followup_settings")],
     [InlineKeyboardButton("🍽️ Manual Shake Deduction", callback_data="cmd_manual_shake_deduction")],
     [InlineKeyboardButton("💳 Pending Shake Purchases", callback_data="cmd_pending_shake_purchases")],
@@ -72,7 +74,7 @@ def get_user_role(user_id: int) -> str:
     3. Is user registered?
     4. Default to 'user'
     
-    Returns: 'admin', 'staff', 'user', or 'unregistered'
+    Returns: 'admin', 'staff', or 'user'
     """
     # Check admin role (highest priority) even if not registered
     if is_admin_id(user_id):
@@ -84,11 +86,6 @@ def get_user_role(user_id: int) -> str:
         logger.debug(f"User {user_id} detected as staff")
         return 'staff'
 
-    # If not registered, return 'unregistered'
-    if not user_exists(user_id):
-        logger.debug(f"User {user_id} is unregistered - assigning user menu")
-        return 'unregistered'
-
     # Default to regular user
     logger.debug(f"User {user_id} detected as regular user")
     return 'user'
@@ -97,19 +94,12 @@ def get_user_role(user_id: int) -> str:
 async def show_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Display role-specific menu to user based on VERIFIED role.
-    
+
     SECURITY CRITICAL:
-    - Role verification MUST succeed before menu display
-    - Unregistered users see LIMITED menu (can only register)
+    - Unregistered users must be blocked (no limited menu)
+    - Subscription gating is enforced by access_gate (LOCAL_DB skips subscription)
     - Admin/Staff verified BEFORE any menu shown
     - No cross-role menu access allowed
-    
-    Role Detection Priority:
-    1. Is user ADMIN? → ADMIN_MENU only
-    2. Is user STAFF? → STAFF_MENU only (with admin access checks in handlers)
-    3. Is user REGISTERED and APPROVED? → USER_MENU (full access)
-    4. Is user REGISTERED but NOT APPROVED? → USER_MENU (limited features)
-    5. UNREGISTERED? → USER_MENU (register button only)
     
     Args:
         update: Telegram update object
@@ -117,10 +107,23 @@ async def show_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     uid = update.effective_user.id
     
-    # STEP 1: STRICT role verification
+    # STEP 0: CENTRAL GATE — block unregistered/expired users here
+    state, _ = get_user_access_state(uid)
+    if state != STATE_ACTIVE_SUBSCRIBER:
+        if state == STATE_NEW_USER:
+            logger.warning(f"[ACCESS] blocked NEW_USER telegram_id={uid} reason=unregistered")
+        elif state == STATE_REGISTERED_NO_SUBSCRIPTION:
+            logger.warning(f"[ACCESS] blocked REGISTERED_NO_SUBSCRIPTION telegram_id={uid}")
+        elif state == STATE_EXPIRED_SUBSCRIBER:
+            logger.warning(f"[ACCESS] blocked EXPIRED_SUBSCRIBER telegram_id={uid}")
+        # Send user-facing message
+        await check_access_gate(update, context, require_subscription=True)
+        logger.info(f"[ACCESS] menu_render_skipped telegram_id={uid}")
+        return
+
+    # STEP 1: STRICT role verification (only for ACTIVE state)
     role = get_user_role(uid)
-    
-    logger.info(f"[SECURITY] Menu access attempt by {uid} with role={role}")
+    logger.info(f"[ACCESS] menu_access_attempt telegram_id={uid} role={role}")
     
     # STEP 2: Route to appropriate menu with strict verification
     if role == 'admin':
@@ -148,39 +151,10 @@ async def show_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"[SECURITY] ✅ Staff menu granted to staff member {uid}")
         
     elif role == 'user':
-        # Check subscription status for regular users
-        if not is_subscription_active(uid):
-            if is_in_grace_period(uid):
-                # In grace period - show menu but with warning
-                menu = USER_MENU
-                role_text = "⚠️ USER MENU (Grace Period - Renew Soon!)"
-                logger.info(f"[SECURITY] User menu shown to user {uid} in grace period")
-            else:
-                # No active subscription - block access
-                logger.warning(f"[SECURITY] Menu blocked for user {uid} - no active subscription")
-                keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💪 Subscribe Now", callback_data="start_subscribe")]
-                ])
-                msg_text = (
-                    "🔒 *Subscription Required*\n\n"
-                    "Your subscription has expired. To access the fitness club app, "
-                    "please renew your subscription.\n\n"
-                    "Use /subscribe to get started!"
-                )
-                if update.message:
-                    await update.message.reply_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
-                elif update.callback_query:
-                    await update.callback_query.message.edit_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
-                return
-        else:
-            menu = USER_MENU
-            role_text = "🙋 USER MENU"
-            logger.info(f"[SECURITY] User menu shown to registered user {uid}")
-        
-    else:  # unregistered
+        # Gate already ensured ACTIVE; show full user menu
         menu = USER_MENU
-        role_text = "👤 WELCOME"
-        logger.info(f"[SECURITY] Limited menu shown to unregistered user {uid}")
+        role_text = "🙋 USER MENU"
+        logger.info(f"[ACCESS] user_menu_render telegram_id={uid}")
     
     msg = f"{role_text}\n\nSelect an action:"
     

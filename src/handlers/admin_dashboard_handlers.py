@@ -17,6 +17,10 @@ from src.utils.auth import is_admin
 from src.utils.message_templates import get_template, save_template
 from src.utils import event_registry
 from src.utils.state_management import clear_stale_states
+from src.utils.flow_manager import (
+    set_active_flow, clear_active_flow, check_flow_ownership,
+    FLOW_DELETE_USER, FLOW_BAN_USER
+)
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from datetime import datetime
@@ -544,6 +548,7 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
 async def callback_toggle_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ask for ban reason before banning user"""
     query = update.callback_query
+    admin_id = query.from_user.id
     user_id = context.user_data.get('selected_user_id')
     user = context.user_data.get('selected_user')
     
@@ -556,9 +561,9 @@ async def callback_toggle_ban(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_currently_banned = user.get('is_banned', False)
     
     if is_currently_banned:
-        # Unban user immediately
+        # Unban user immediately (no flow lock needed for immediate action)
         unban_user(user_id)
-        logger.info(f"Admin {query.from_user.id} unbanned user {user_id}")
+        logger.info(f"Admin {admin_id} unbanned user {user_id}")
         
         # Send notification to user
         try:
@@ -579,7 +584,8 @@ async def callback_toggle_ban(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="Markdown"
         )
     else:
-        # Ask for ban reason
+        # Ask for ban reason - LOCK THIS FLOW
+        set_active_flow(admin_id, FLOW_BAN_USER)
         await query.edit_message_text(
             f"🚫 *Ban User: {user['full_name']}*\n\n"
             f"Please provide a reason for banning this user:\n\n"
@@ -593,10 +599,16 @@ async def callback_toggle_ban(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_ban_reason_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle ban reason input and execute ban"""
+    admin_id = update.effective_user.id
+    
+    # CRITICAL: Check flow ownership
+    if not check_flow_ownership(admin_id, FLOW_BAN_USER):
+        await update.message.reply_text("❌ Invalid context. Please use /menu to start over.")
+        return ConversationHandler.END
+    
     ban_reason = update.message.text.strip()
     user_id = context.user_data.get('selected_user_id')
     user = context.user_data.get('selected_user')
-    admin_id = update.effective_user.id
     admin_name = update.effective_user.first_name or "Admin"
     
     if not user_id or not user:
@@ -636,12 +648,16 @@ async def handle_ban_reason_input(update: Update, context: ContextTypes.DEFAULT_
         parse_mode="Markdown"
     )
     
+    # CRITICAL: Clear ban flow lock
+    clear_active_flow(admin_id, FLOW_BAN_USER)
+    
     return SELECT_USER_ACTION
 
 
 async def callback_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Confirm deletion of user"""
     query = update.callback_query
+    admin_id = query.from_user.id
     user_id = context.user_data.get('selected_user_id')
     user = context.user_data.get('selected_user')
     
@@ -650,6 +666,9 @@ async def callback_delete_user(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     await query.answer()
+    
+    # CRITICAL: Lock DELETE_USER flow to prevent Invoice messages from interfering
+    set_active_flow(admin_id, FLOW_DELETE_USER)
     
     keyboard = [
         [InlineKeyboardButton("✅ Yes, Delete", callback_data="mng_usr_confirm_delete"),
@@ -674,9 +693,15 @@ async def callback_delete_user(update: Update, context: ContextTypes.DEFAULT_TYP
 async def callback_confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Confirm and execute user deletion"""
     query = update.callback_query
+    admin_id = query.from_user.id
+    
+    # CRITICAL: Check flow ownership - only proceed if DELETE_USER is active
+    if not check_flow_ownership(admin_id, FLOW_DELETE_USER):
+        await query.answer("❌ Invalid context. Please use /menu to start over.", show_alert=True)
+        return ConversationHandler.END
+    
     user_id = context.user_data.get('selected_user_id')
     user = context.user_data.get('selected_user')
-    admin_id = query.from_user.id
     admin_name = query.from_user.first_name or "Admin"
     
     if not user_id or not user:
@@ -722,9 +747,14 @@ async def callback_confirm_delete(update: Update, context: ContextTypes.DEFAULT_
         context.user_data.pop('selected_user_id', None)
         context.user_data.pop('selected_user', None)
         
+        # CRITICAL: Clear DELETE_USER flow lock
+        clear_active_flow(admin_id, FLOW_DELETE_USER)
+        
     except Exception as e:
         logger.error(f"Error deleting user: {e}")
         await query.edit_message_text(f"❌ Error deleting user: {str(e)}")
+        # CRITICAL: Clear flow lock even on error
+        clear_active_flow(admin_id, FLOW_DELETE_USER)
 
 
 async def cmd_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):

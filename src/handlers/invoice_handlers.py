@@ -84,21 +84,13 @@ async def inv_search_query_handler(update: Update, context: ContextTypes.DEFAULT
     try:
         term = update.message.text.strip()
         from src.database.user_operations import search_users
-        from src.utils.user_registry import search_registry
+        # user_registry removed - database is single source of truth
         
         logger.info(f"[INVOICE_SEARCH] query='{term}'")
         
-        # Try DB first
+        # Database only
         results = search_users(term, limit=10, offset=0)
         logger.info(f"[INVOICE_SEARCH] db_matches_found={len(results) if results else 0}")
-        
-        # Fallback to JSON registry if DB returns nothing
-        if not results:
-            logger.info(f"[INVOICE_SEARCH] db_empty, trying json registry")
-            results = search_registry(term, limit=10)
-            logger.info(f"[INVOICE_SEARCH] json_matches_found={len(results) if results else 0}")
-            if results:
-                logger.info(f"[INVOICE_SEARCH] using_json_registry=true")
         
         if not results:
             logger.info("[INVOICE_SEARCH] no_results from db or registry")

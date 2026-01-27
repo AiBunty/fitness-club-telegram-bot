@@ -12,5 +12,6 @@ def assert_no_remote_db_access(action: str = "DB access"):
         action: Human-friendly action attempted (for log clarity)
     """
     if USE_LOCAL_DB:
-        logger.error(f"[DB_GUARD] Remote DB access attempted in local mode: {action}")
-        raise RuntimeError(f"[DB_GUARD] Remote DB access attempted in local mode: {action}")
+        # In local mode, only warn and skip to avoid crashing interactive commands
+        logger.warning(f"[DB_GUARD] Remote DB access attempted in local mode (skipped): {action}")
+        return

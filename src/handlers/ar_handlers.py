@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict, Any
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, CommandHandler, filters
 
@@ -8,6 +9,7 @@ from src.database.ar_operations import (
     create_receivable, create_transactions, update_receivable_status,
     get_receivable_breakdown, get_overdue_receivables
 )
+from src.database import ar_reports
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +245,144 @@ async def ar_credit_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text)
     else:
         await update.message.reply_text(text)
+
+
+# --------------------------- Reports & Dashboard ---------------------------
+
+REPORT_INLINE_THRESHOLD = 20  # rows; above this we send CSV/Excel
+
+
+async def ar_reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = update.effective_user.id
+    if not is_admin(admin_id):
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Daily Collections", callback_data="ar_report_daily")],
+        [InlineKeyboardButton("📈 Weekly Summary", callback_data="ar_report_weekly")],
+        [InlineKeyboardButton("🗓 Monthly Collections", callback_data="ar_report_month")],
+        [InlineKeyboardButton("⏳ Aging", callback_data="ar_report_aging")],
+        [InlineKeyboardButton("💳 Payment Methods", callback_data="ar_report_methods")],
+        [InlineKeyboardButton("📥 Outstanding", callback_data="ar_report_outstanding")],
+    ])
+    await update.message.reply_text("📊 AR Reports — choose a report:", reply_markup=kb)
+
+
+async def _send_csv(chat_func, filename: str, rows: List[List[Any]], headers: List[str]):
+    import io, csv
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    data = buf.getvalue().encode("utf-8")
+    buf.close()
+    await chat_func(document=data, filename=filename)
+
+
+def _today_range():
+    today = datetime.now().date()
+    return today, today
+
+
+def _week_range():
+    end = datetime.now().date()
+    start = end - timedelta(days=6)
+    return start, end
+
+
+def _month_range():
+    now = datetime.now().date()
+    start = now.replace(day=1)
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1) - timedelta(days=1)
+    else:
+        end = start.replace(month=start.month + 1) - timedelta(days=1)
+    return start, end
+
+
+async def ar_report_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    admin_id = query.from_user.id
+    if not is_admin(admin_id):
+        await query.edit_message_text("❌ Admin access only.")
+        return
+
+    action = query.data
+    chat_send = query.edit_message_text
+
+    if action == "ar_report_daily":
+        rows = ar_reports.generate_daily_collections(datetime.now())
+        if not rows:
+            await chat_send("No transactions today.")
+            return
+        if len(rows) <= REPORT_INLINE_THRESHOLD:
+            lines = [f"• {r['tx_date']} {r['method'].upper()} ₹{float(r['amount']):.2f} - {r.get('full_name','')}" for r in rows]
+            total = sum(float(r['amount']) for r in rows)
+            await chat_send("📅 Daily Collections\n" + "\n".join(lines) + f"\n\nTotal: ₹{total:.2f}")
+        else:
+            csv_rows = [[r['tx_date'], r['method'], f"{float(r['amount']):.2f}", r.get('full_name',''), r.get('receivable_type',''), r.get('source_id',''), r.get('reference','') or '', r.get('created_by','')] for r in rows]
+            await _send_csv(query.message.reply_document, f"ar_daily_{datetime.now().strftime('%Y%m%d')}.csv", csv_rows, ["Date","Method","Amount","User","Type","Source","Reference","Admin"])
+        return
+
+    if action == "ar_report_weekly":
+        rows = ar_reports.generate_weekly_summary(datetime.now(), days=7)
+        if not rows:
+            await chat_send("No transactions in last 7 days.")
+            return
+        summary_lines = [f"• {r['tx_date']} {r['method'].upper()}: ₹{float(r['total']):.2f} ({r['count']} tx)" for r in rows]
+        await chat_send("📈 Weekly Summary (last 7 days)\n" + "\n".join(summary_lines))
+        return
+
+    if action == "ar_report_month":
+        start, _end = _month_range()
+        rows = ar_reports.generate_monthly_collections(start.year, start.month)
+        if not rows:
+            await chat_send("No transactions this month.")
+            return
+        if len(rows) <= REPORT_INLINE_THRESHOLD:
+            lines = [f"• {r['tx_date']} {r['method'].upper()}: ₹{float(r['total']):.2f} ({r['count']} tx)" for r in rows]
+            await chat_send(f"🗓 Monthly Collections ({start:%b %Y})\n" + "\n".join(lines))
+        else:
+            csv_rows = [[r['tx_date'], r['method'], f"{float(r['total']):.2f}", r['count']] for r in rows]
+            await _send_csv(query.message.reply_document, f"ar_month_{start:%Y%m}.csv", csv_rows, ["Date","Method","Amount","Count"])
+        return
+
+    if action == "ar_report_aging":
+        rows = ar_reports.generate_aging(datetime.now())
+        if not rows:
+            await chat_send("No open receivables.")
+            return
+        if len(rows) <= REPORT_INLINE_THRESHOLD:
+            lines = [f"• {r.get('full_name','')} [{r.get('receivable_type','')}] balance ₹{float(r['balance']):.2f} bucket {r['bucket']}" for r in rows]
+            await chat_send("⏳ Aging (as of today)\n" + "\n".join(lines))
+        else:
+            csv_rows = [[r.get('receivable_id'), r.get('full_name',''), r.get('receivable_type',''), r.get('source_id',''), f"{float(r.get('final_amount',0)):.2f}", f"{float(r.get('received',0)):.2f}", f"{float(r.get('balance',0)):.2f}", r.get('due_date'), r.get('bucket')] for r in rows]
+            await _send_csv(query.message.reply_document, f"ar_aging_{datetime.now():%Y%m%d}.csv", csv_rows, ["Receivable","Name","Type","Source","Final","Received","Balance","Due Date","Bucket"])
+        return
+
+    if action == "ar_report_methods":
+        start, end = _week_range()
+        rows = ar_reports.generate_payment_method_breakdown(start, end)
+        if not rows:
+            await chat_send("No transactions in range.")
+            return
+        lines = [f"• {r['method'].upper()}: ₹{float(r['total']):.2f} ({r['count']} tx)" for r in rows]
+        await chat_send(f"💳 Payment Methods ({start:%d %b}–{end:%d %b})\n" + "\n".join(lines))
+        return
+
+    if action == "ar_report_outstanding":
+        rows = ar_reports.generate_outstanding(datetime.now())
+        if not rows:
+            await chat_send("No outstanding receivables.")
+            return
+        if len(rows) <= REPORT_INLINE_THRESHOLD:
+            lines = [f"• {r.get('full_name','')} [{r.get('receivable_type','')}] balance ₹{float(r['balance']):.2f} (due {r.get('due_date') or 'N/A'})" for r in rows]
+            await chat_send("📥 Outstanding Receivables\n" + "\n".join(lines))
+        else:
+            csv_rows = [[r.get('receivable_id'), r.get('full_name',''), r.get('receivable_type',''), r.get('source_id',''), f"{float(r.get('final_amount',0)):.2f}", f"{float(r.get('received',0)):.2f}", f"{float(r.get('balance',0)):.2f}", r.get('due_date'), r.get('status')] for r in rows]
+            await _send_csv(query.message.reply_document, f"ar_outstanding_{datetime.now():%Y%m%d}.csv", csv_rows, ["Receivable","Name","Type","Source","Final","Received","Balance","Due Date","Status"])
+        return
 
 
 def get_ar_conversation_handler():

@@ -52,7 +52,7 @@ def get_all_users():
     """Get all registered users"""
     query = """
         SELECT user_id, telegram_username, full_name, phone, age, 
-               role, created_at, fee_status, is_banned
+               role, created_at, fee_status
         FROM users 
         ORDER BY created_at DESC
     """
@@ -62,9 +62,9 @@ def get_all_paid_users():
     """Get all users with paid membership fee status"""
     query = """
         SELECT user_id, telegram_username, full_name, phone, age, 
-               role, created_at, fee_status, is_banned
+               role, created_at, fee_status
         FROM users 
-        WHERE fee_status = 'paid' AND is_banned = FALSE
+        WHERE fee_status = 'paid'
         ORDER BY created_at DESC
     """
     return execute_query(query)
@@ -86,8 +86,8 @@ def delete_user(user_id: int):
     Returns:
         dict: Deleted user record with full_name, or None if not found
     """
-    from src.database.connection import DatabaseConnectionPool
-    
+    from src.database.connection import get_connection, release_connection
+
     # Validate user_id is a positive integer
     if not isinstance(user_id, int) or user_id <= 0:
         logger.error(f"Invalid user_id for deletion: {user_id} (type: {type(user_id)})")
@@ -117,12 +117,13 @@ def delete_user(user_id: int):
             logger.debug(f"[DELETE_USER] Skipping {table} for user {user_id}: {e}")
     
     # Finally delete the user with connection pool management
-    pool = None
     conn = None
     try:
-        pool = DatabaseConnectionPool().get_pool()
-        conn = pool.getconn()
-        
+        conn = get_connection()
+        if not conn:
+            logger.info(f"[DELETE_USER] No DB connection available (local mode); skipping deletion for user {user_id}")
+            return None
+
         with conn.cursor() as cursor:
             # CRITICAL: Use BIGINT casting to ensure proper type matching
             cursor.execute("DELETE FROM users WHERE user_id = %s::BIGINT RETURNING full_name", (user_id,))
@@ -145,24 +146,25 @@ def delete_user(user_id: int):
         logger.error(f"[DELETE_USER] Error deleting user {user_id}: {e}")
         return None
     finally:
-        # CRITICAL: Always return connection to pool for 200+ user stability
-        if conn and pool:
+        # Always return connection to pool safely (no-op in local mode)
+        if conn:
             try:
-                pool.putconn(conn)
-                logger.debug(f"[DELETE_USER] Connection returned to pool for user {user_id}")
+                release_connection(conn)
+                logger.debug(f"[DELETE_USER] Connection released for user {user_id}")
             except Exception as e:
-                logger.error(f"[DELETE_USER] Error returning connection to pool: {e}")
+                logger.error(f"[DELETE_USER] Error releasing connection: {e}")
 
 def ban_user(user_id: int, reason: str = None):
     """Ban a user from using the bot with connection pool management"""
-    from src.database.connection import DatabaseConnectionPool
-    
-    pool = None
+    from src.database.connection import get_connection, release_connection
+
     conn = None
     try:
-        pool = DatabaseConnectionPool().get_pool()
-        conn = pool.getconn()
-        
+        conn = get_connection()
+        if not conn:
+            logger.info(f"[BAN_USER] No DB connection available (local mode); skipping ban for user {user_id}")
+            return None
+
         with conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE users SET is_banned = TRUE, ban_reason = %s, banned_at = CURRENT_TIMESTAMP "
@@ -185,22 +187,23 @@ def ban_user(user_id: int, reason: str = None):
         logger.error(f"Error banning user {user_id}: {e}")
         return None
     finally:
-        if conn and pool:
+        if conn:
             try:
-                pool.putconn(conn)
+                release_connection(conn)
             except Exception as e:
-                logger.error(f"Error returning connection to pool: {e}")
+                logger.error(f"Error releasing connection to pool: {e}")
 
 def unban_user(user_id: int):
     """Unban a user with connection pool management"""
-    from src.database.connection import DatabaseConnectionPool
-    
-    pool = None
+    from src.database.connection import get_connection, release_connection
+
     conn = None
     try:
-        pool = DatabaseConnectionPool().get_pool()
-        conn = pool.getconn()
-        
+        conn = get_connection()
+        if not conn:
+            logger.info(f"[UNBAN_USER] No DB connection available (local mode); skipping unban for user {user_id}")
+            return None
+
         with conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE users SET is_banned = FALSE, ban_reason = NULL, banned_at = NULL "
@@ -223,11 +226,11 @@ def unban_user(user_id: int):
         logger.error(f"Error unbanning user {user_id}: {e}")
         return None
     finally:
-        if conn and pool:
+        if conn:
             try:
-                pool.putconn(conn)
+                release_connection(conn)
             except Exception as e:
-                logger.error(f"Error returning connection to pool: {e}")
+                logger.error(f"Error releasing connection to pool: {e}")
 
 def is_user_banned(user_id: int) -> bool:
     """Check if a user is banned"""
@@ -291,7 +294,7 @@ def get_pending_users():
 
 
 def search_users(term: str, limit: int = 10, offset: int = 0):
-    """Search users by full_name, telegram_username, or user_id using ILIKE for partial matches.
+    """Search users by full_name, telegram_username, or user_id using LIKE for partial matches.
     
     Returns users with their approval_status so callers can filter or display status.
     Supports fuzzy search with wildcards for names/usernames and exact match for numeric IDs.
@@ -308,12 +311,12 @@ def search_users(term: str, limit: int = 10, offset: int = 0):
             """
             rows = execute_query(query, (user_id, limit, offset))
         else:
-            # Fuzzy text search with ILIKE and wildcards
+            # Fuzzy text search with LIKE and wildcards (MySQL LIKE is case-insensitive by default)
             like = f"%{term}%"
             query = """
                 SELECT user_id, telegram_username, full_name, approval_status
                 FROM users
-                WHERE (full_name ILIKE %s OR telegram_username ILIKE %s)
+                WHERE (full_name LIKE %s OR telegram_username LIKE %s)
                 ORDER BY 
                     CASE 
                         WHEN approval_status = 'approved' THEN 1

@@ -1,7 +1,39 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.ext import ContextTypes, ConversationHandler
-from src.database.user_operations import user_exists, create_user, get_user, is_user_banned
+from src.config import USE_LOCAL_DB
+
+# Database is the single source of truth. Provide wrappers for local mode so
+# downstream code can always call user_exists/get_user/create_user.
+if USE_LOCAL_DB:
+    from src.database.user_operations import (
+        user_exists as db_user_exists,
+        get_user as db_get_user,
+        create_user as db_create_user,
+        is_user_banned as db_is_user_banned,
+    )
+
+    def user_exists(user_id: int) -> bool:
+        return db_user_exists(user_id)
+
+    def get_user(user_id: int):
+        return db_get_user(user_id)
+
+    def create_user(user_id: int, full_name: str, phone: str, age: int, weight: float, gender: str, profile_pic_id: str = None):
+        return db_create_user(user_id, full_name, phone, age, weight, gender, profile_pic_id)
+
+    def is_user_banned(user_id: int) -> bool:
+        # Local mode: if ban table not present, assume not banned
+        try:
+            return db_is_user_banned(user_id)
+        except Exception:
+            return False
+else:
+    from src.database.user_operations import user_exists, create_user, get_user, is_user_banned
 from src.database.attendance_operations import (
     create_attendance_request, get_user_attendance_today, approve_attendance
 )
@@ -12,6 +44,7 @@ from src.database.activity_operations import get_user_points, get_leaderboard
 from src.handlers.role_keyboard_handlers import show_role_menu
 from src.utils.auth import is_admin_id
 from src.utils.role_notifications import get_moderator_chat_ids
+from src.utils.welcome_message import get_welcome_message
 from src.utils.guards import check_registration, check_approval
 from src.database.subscription_operations import (
     get_user_subscription, is_subscription_active, is_in_grace_period
@@ -25,162 +58,73 @@ NAME, PHONE, AGE, WEIGHT, GENDER, PROFILE_PIC = range(6)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show rich welcome with a Register button; do not start registration yet."""
+    """Restore simple /start welcome with DB-backed text and safe buttons."""
     msg = update.effective_message
-    user_id = update.effective_user.id
-    
-    # Track user in registry for invoice search
-    from src.utils.user_registry import track_user
-    try:
-        track_user(
-            user_id=user_id,
-            first_name=update.effective_user.first_name or '',
-            last_name=update.effective_user.last_name or '',
-            username=update.effective_user.username or ''
-        )
-    except Exception as e:
-        logger.warning(f"[USER_REGISTRY] Error tracking user: {e}")
-    
-    payload = context.args[0] if context.args else None
-    
-    # Set commands based on user's role (async, doesn't block)
+    user = update.effective_user
+    telegram_id = user.id
+
+    # Best-effort command refresh; do not block welcome
     try:
         from src.bot import set_commands_for_user
-        context.application.create_task(set_commands_for_user(user_id, context.bot))
+        context.application.create_task(set_commands_for_user(telegram_id, context.bot))
     except Exception as e:
-        logger.warning(f"Could not set user commands: {e}")
-    
-    # Check if user is banned - block access
-    if user_exists(user_id) and is_user_banned(user_id):
-        await msg.reply_text(
-            "🚫 *Account Blocked*\n\n"
-            "Your account has been banned and you cannot access the app.\n"
-            "Contact support for more information.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-    
-    # Handle studio check-in payload from QR deep link first
-    if payload == "studio_checkin":
-        # Geofenced check-in: request user location first
-        if not user_exists(user_id):
-            buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Register Now", callback_data="register")]])
+        logger.debug(f"[WELCOME] set_commands_for_user failed for {telegram_id}: {e}")
+
+    # Check ban early; avoid gating errors from blocking welcome
+    try:
+        if is_user_banned(telegram_id):
             await msg.reply_text(
-                "You scanned the studio check-in QR. Please register first to log attendance.",
-                reply_markup=buttons,
+                "🚫 Account blocked. Contact support if you believe this is a mistake.",
+                parse_mode="Markdown",
             )
             return ConversationHandler.END
+    except Exception as e:
+        logger.debug(f"[WELCOME] ban check skipped for {telegram_id}: {e}")
 
-        if not (GEOFENCE_LAT and GEOFENCE_LNG):
-            await msg.reply_text("❌ Geofence not configured. Contact admin.")
-            return ConversationHandler.END
-
-        keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton(text="📍 Share Location", request_location=True)]],
-            one_time_keyboard=True,
-            resize_keyboard=True,
-        )
-        context.user_data['awaiting_geo_checkin'] = True
-        await msg.reply_text(
-            "Please share your location to complete check-in (10m radius).",
-            reply_markup=keyboard,
-        )
-        return ConversationHandler.END
-
-    # Allow admins to bypass registration entirely
-    if is_admin_id(user_id) and not user_exists(user_id):
-        await msg.reply_text(
-            "🛡️ Admin access granted. Registration not required. Opening admin menu..."
-        )
-        await show_role_menu(update, context)
-        return ConversationHandler.END
-
-    # No payload path: greet existing users or show welcome for new
-    if user_exists(user_id):
-        user = get_user(user_id)
-        
-        # Check subscription status for regular users
-        if not is_admin_id(user_id):
-            sub = get_user_subscription(user_id)
-            
-            if not sub or not is_subscription_active(user_id):
-                # Check if in grace period
-                if is_in_grace_period(user_id):
-                    await msg.reply_text(
-                        f"⚠️ Welcome back, {user['full_name']}!\n\n"
-                        "🔔 Your subscription has expired but you're in the grace period.\n\n"
-                        "Please renew your subscription to continue using the app.\n"
-                        "Use /subscribe to renew now!",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    # No subscription or expired past grace period
-                    keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💪 Subscribe Now", callback_data="start_subscribe")]
-                    ])
-                    await msg.reply_text(
-                        f"Hello {user['full_name']}! 👋\n\n"
-                        "🔒 To access the fitness club app, you need an active subscription.\n\n"
-                        "Choose a subscription plan to unlock:\n"
-                        "• Activity tracking\n"
-                        "• Weight tracking\n"
-                        "• Challenge participation\n"
-                        "• Shake orders\n"
-                        "• And much more!\n\n"
-                        "Tap below to get started 👇",
-                        reply_markup=keyboard
-                    )
-                return ConversationHandler.END
-        
-        await msg.reply_text(
-            f"Welcome back, {user['full_name']}! 👋\n\n"
-            "Tap Admin/Staff/User buttons via /menu to navigate."
-        )
-        return ConversationHandler.END
-
-    welcome_text = (
-        "🏋️ *Welcome to Wani's Level Up Club!* 💪\n"
-        "✨ *A Herbalife Fitness Studio where Transformation Meets Community!*\n\n"
-        "Hey there, Champion! 👋\n"
-        "You've just taken the first step toward a healthier, stronger YOU! 🌱\n\n"
-        "At Wani's Level Up Club, we believe fitness isn't just about workouts — it's a lifestyle.\n"
-        "Here's what awaits you inside ⤵️\n\n"
-        "🔥 *Community Workouts* – Feel the energy, train together, grow together!\n"
-        "🏋️‍♂️ *Personal Training (PT)* – Custom guidance to help you smash your goals\n"
-        "🥤 *Herbalife Nutrition & Shakes* – Fuel your fitness with science-backed nutrition\n"
-        "🤝 *Supportive Community* – Stay motivated with like-minded achievers\n\n"
-        "Let's get started! 🚀\n"
-        "Tap below to register and begin your Level Up journey today 👇"
-    )
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Register Now", callback_data="register")]
-    ])
-    # Render via template engine to allow admin customization while preserving behavior
-    from src.utils.event_dispatcher import render_event
-    rendered_text, tpl_buttons = render_event('USER_WELCOME', {'name': update.effective_user.first_name})
-    # prefer template buttons if present, else use existing
-    final_markup = None
-    if tpl_buttons:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        keyboard = []
-        for row in tpl_buttons:
-            r = []
-            for b in row:
-                r.append(InlineKeyboardButton(b.get('text','Button'), callback_data=b.get('callback_data','')))
-            keyboard.append(r)
-        final_markup = InlineKeyboardMarkup(keyboard)
-    else:
-        final_markup = buttons
-
-    await msg.reply_text(rendered_text or welcome_text, reply_markup=final_markup, parse_mode='Markdown')
-    # Schedule follow-ups if configured
+    # Fetch user profile from DB
+    db_user = None
     try:
-        from src.utils.event_dispatcher import schedule_followups
-        if context and getattr(context, 'application', None):
-            schedule_followups(context.application, update.effective_user.id, 'USER_WELCOME', {'name': update.effective_user.first_name})
-    except Exception:
-        logger.debug('Could not schedule follow-ups for USER_WELCOME')
+        db_user = get_user(telegram_id)
+    except Exception as e:
+        logger.debug(f"[WELCOME] get_user failed for {telegram_id}: {e}")
 
+    # ---------- NEW USER ----------
+    if db_user is None:
+        try:
+            welcome_text = get_welcome_message()
+        except Exception as e:
+            logger.warning(f"[WELCOME] fallback to default due to error: {e}")
+            from src.utils.welcome_message import DEFAULT_WELCOME_MESSAGE
+            welcome_text = DEFAULT_WELCOME_MESSAGE
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Register", callback_data="register")],
+        ])
+
+        await msg.reply_text(welcome_text, reply_markup=keyboard, parse_mode='Markdown')
+        logger.info(f"[WELCOME] NEW_USER welcome sent telegram_id={telegram_id}")
+        return ConversationHandler.END
+
+    # ---------- REGISTERED USER ----------
+    full_name = db_user.get("full_name", "Member")
+    role = db_user.get("role", "user")
+    expiry = db_user.get("subscription_end") or db_user.get("subscription_end_date") or "N/A"
+
+    text = (
+        f"👋 Welcome back, {full_name}!\n\n"
+        f"🆔 Telegram ID: {telegram_id}\n"
+        f"👔 Role: {role}\n"
+        f"📅 Subscription valid till: {expiry}"
+    )
+
+    # Use commands for compatibility with existing handlers
+    menu_kb = ReplyKeyboardMarkup([
+        ["/menu", "/whoami"],
+    ], resize_keyboard=True)
+
+    await msg.reply_text(text, reply_markup=menu_kb)
+
+    logger.info(f"[WELCOME] REGISTERED_USER welcome sent telegram_id={telegram_id}")
     return ConversationHandler.END
 
 
@@ -566,10 +510,12 @@ async def registration_timeout(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"[MENU] command received user_id={user_id}")
     
-    # Check if approved
-    if not await check_approval(update, context):
-        return
+    # GATE: Enforce registration + active subscription
+    from src.utils.access_gate import check_app_feature_access
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
     
     # Auto-detect role and show role-specific menu with inline buttons
     await show_role_menu(update, context)

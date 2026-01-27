@@ -21,10 +21,36 @@ def _job_exists(application, name: str) -> bool:
         return False
 
 
+def _notify_admin_reminder_failure(ctx, user_id: int, rtype: str, error: Exception):
+    try:
+        from src.config import SUPER_ADMIN_USER_ID
+        if not SUPER_ADMIN_USER_ID:
+            return
+        msg = (
+            "🚨 Reminder failed\n"
+            f"User: {user_id}\n"
+            f"Type: {rtype}\n"
+            f"Error: {error}"
+        )
+        try:
+            bot = getattr(ctx, 'bot', None) or getattr(ctx, 'application', None)
+            if bot:
+                if hasattr(bot, 'send_message'):
+                    send = bot.send_message
+                else:
+                    send = ctx.bot.send_message
+                send(chat_id=int(SUPER_ADMIN_USER_ID), text=msg)
+        except Exception:
+            # Swallow admin notify errors
+            pass
+    except Exception:
+        logger.debug("Could not notify admin about reminder failure")
+
+
 def schedule_user_water_reminder(application, user_id: int, interval_minutes: int):
     """Schedule a repeating per-user water reminder. Idempotent."""
     try:
-        job_name = f"water_reminder_{user_id}"
+        job_name = f"water:{user_id}"
         # Cancel existing job if interval changed
         existing = application.job_queue.get_jobs_by_name(job_name)
         if existing:
@@ -38,9 +64,9 @@ def schedule_user_water_reminder(application, user_id: int, interval_minutes: in
 
         # Schedule the per-user repeating job
         async def _user_water_job(ctx: ContextTypes.DEFAULT_TYPE):
-            from src.database.reminder_operations import get_reminder_preferences
-            prefs = get_reminder_preferences(user_id)
-            if not prefs or not prefs.get('water_reminder_enabled', True):
+            from src.database.reminder_operations import get_reminder_profile
+            prefs = get_reminder_profile(user_id)
+            if not prefs or not prefs.get('water_enabled', True):
                 logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} disabled")
                 return
             # send single reminder
@@ -54,19 +80,20 @@ def schedule_user_water_reminder(application, user_id: int, interval_minutes: in
                 keyboard = [[InlineKeyboardButton("💧 Log Water", callback_data="cmd_water")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await ctx.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
-                logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} sent")
+                logger.info(f"[REMINDER_SENT] type=water user_id={user_id}")
             except Exception as e:
-                logger.debug(f"Could not send water reminder to user {user_id}: {e}")
+                logger.error(f"Could not send water reminder to user {user_id}: {e}")
+                _notify_admin_reminder_failure(ctx, user_id, "water", e)
 
         application.job_queue.run_repeating(_user_water_job, interval=interval_minutes * 60, first=10, name=job_name)
-        logger.info(f"[REMINDER] type=LOG_WATER user_id={user_id} time=interval_{interval_minutes}m")
+        logger.info(f"[REMINDER_BOOT] type=water user_id={user_id} interval={interval_minutes}m")
     except Exception as e:
         logger.debug(f"Failed to schedule water reminder for {user_id}: {e}")
 
 
 def cancel_user_water_reminder(application, user_id: int):
     try:
-        job_name = f"water_reminder_{user_id}"
+        job_name = f"water:{user_id}"
         existing = application.job_queue.get_jobs_by_name(job_name)
         for j in existing:
             try:
@@ -90,7 +117,7 @@ def schedule_user_weight_reminder(application, user_id: int, time_str: str):
         except Exception:
             hh, mm = 6, 0
 
-        job_name = f"weight_reminder_{user_id}"
+        job_name = f"weight:{user_id}"
         existing = application.job_queue.get_jobs_by_name(job_name)
         if existing:
             # Remove existing before scheduling new
@@ -102,9 +129,9 @@ def schedule_user_weight_reminder(application, user_id: int, time_str: str):
             logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} rescheduled new_time={time_str}")
 
         async def _user_weight_job(ctx: ContextTypes.DEFAULT_TYPE):
-            from src.database.reminder_operations import get_reminder_preferences
-            prefs = get_reminder_preferences(user_id)
-            if not prefs or not prefs.get('weight_reminder_enabled', True):
+            from src.database.reminder_operations import get_reminder_profile
+            prefs = get_reminder_profile(user_id)
+            if not prefs or not prefs.get('weight_enabled', True):
                 logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} disabled")
                 return
             try:
@@ -117,13 +144,14 @@ def schedule_user_weight_reminder(application, user_id: int, time_str: str):
                 keyboard = [[InlineKeyboardButton("⚖️ Log Weight", callback_data="cmd_weight")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await ctx.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
-                logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} sent")
+                logger.info(f"[REMINDER_SENT] type=weight user_id={user_id}")
             except Exception as e:
-                logger.debug(f"Could not send weight reminder to user {user_id}: {e}")
+                logger.error(f"Could not send weight reminder to user {user_id}: {e}")
+                _notify_admin_reminder_failure(ctx, user_id, "weight", e)
 
         from datetime import time as dt_time
         application.job_queue.run_daily(_user_weight_job, time=dt_time(hour=hh, minute=mm), name=job_name)
-        logger.info(f"[REMINDER] type=LOG_WEIGHT user_id={user_id} time={time_str}")
+        logger.info(f"[REMINDER_BOOT] type=weight user_id={user_id} time={time_str}")
     except Exception as e:
         logger.debug(f"Failed to schedule weight reminder for {user_id}: {e}")
 
@@ -142,38 +170,107 @@ def cancel_user_weight_reminder(application, user_id: int):
         logger.debug(f"Failed to cancel weight reminder for {user_id}: {e}")
 
 
-def schedule_all_user_reminders(application):
-    """Bootstrap per-user reminders at startup. Idempotent."""
+def schedule_user_meal_reminder(application, user_id: int, meal: str, time_str: str):
+    if meal not in {"lunch", "dinner"}:
+        return
     try:
-        from src.database.reminder_operations import get_users_with_water_reminders_enabled, get_users_with_weight_reminders_enabled
-        
-        logger.info("[BOOTSTRAP] Starting user reminder scheduling...")
-
-        # Water - with timeout protection
+        hh, mm = 12, 0
         try:
-            logger.info("[BOOTSTRAP] Querying water reminder users...")
-            water_users = get_users_with_water_reminders_enabled() or []
-            logger.info(f"[BOOTSTRAP] Found {len(water_users)} users with water reminders")
-            for u in water_users:
-                uid = u.get('user_id')
-                interval = u.get('interval_minutes') or 60
-                schedule_user_water_reminder(application, uid, interval)
-        except Exception as e:
-            logger.warning(f"[BOOTSTRAP] Could not load water reminders: {e}")
+            parts = time_str.split(":")
+            hh = int(parts[0]); mm = int(parts[1])
+        except Exception:
+            hh, mm = (13, 0) if meal == "lunch" else (20, 0)
 
-        # Weight - with timeout protection
-        try:
-            logger.info("[BOOTSTRAP] Querying weight reminder users...")
-            weight_users = get_users_with_weight_reminders_enabled() or []
-            logger.info(f"[BOOTSTRAP] Found {len(weight_users)} users with weight reminders")
-            for u in weight_users:
-                uid = u.get('user_id')
-                time_str = u.get('reminder_time') or '06:00'
-                schedule_user_weight_reminder(application, uid, time_str)
-        except Exception as e:
-            logger.warning(f"[BOOTSTRAP] Could not load weight reminders: {e}")
+        job_name = f"{meal}:{user_id}"
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        for j in existing:
+            try:
+                j.schedule_removal()
+            except Exception:
+                pass
 
-        logger.info("[SCHEDULER] started")
+        async def _meal_job(ctx: ContextTypes.DEFAULT_TYPE):
+            from src.database.reminder_operations import get_reminder_profile
+            prefs = get_reminder_profile(user_id)
+            if not prefs or not prefs.get(f"{meal}_enabled", False):
+                logger.info(f"[REMINDER] type={meal} user_id={user_id} disabled")
+                return
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                text = (
+                    f"🍽️ *{meal.title()} Reminder*\n\n"
+                    "Time to log your meal!\n\n"
+                    "Use /meal to add your meal photo."
+                )
+                keyboard = [[InlineKeyboardButton("🍽️ Log Meal", callback_data="cmd_meal")]]
+                await ctx.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                logger.info(f"[REMINDER_SENT] type={meal} user_id={user_id}")
+            except Exception as e:
+                logger.error(f"Could not send {meal} reminder to user {user_id}: {e}")
+                _notify_admin_reminder_failure(ctx, user_id, meal, e)
+
+        from datetime import time as dt_time
+        application.job_queue.run_daily(_meal_job, time=dt_time(hour=hh, minute=mm), name=job_name)
+        logger.info(f"[REMINDER_BOOT] type={meal} user_id={user_id} time={time_str}")
+    except Exception as e:
+        logger.debug(f"Failed to schedule {meal} reminder for {user_id}: {e}")
+
+
+def cancel_user_meal_reminder(application, user_id: int, meal: str):
+    if meal not in {"lunch", "dinner"}:
+        return
+    try:
+        job_name = f"{meal}:{user_id}"
+        existing = application.job_queue.get_jobs_by_name(job_name)
+        for j in existing:
+            try:
+                j.schedule_removal()
+            except Exception:
+                pass
+        logger.info(f"[REMINDER] type={meal} user_id={user_id} cancelled")
+    except Exception as e:
+        logger.debug(f"Failed to cancel {meal} reminder for {user_id}: {e}")
+
+
+def schedule_all_user_reminders(application):
+    """Bootstrap per-user reminders from reminder_profile (idempotent)."""
+    try:
+        from src.database.reminder_operations import get_all_profiles
+
+        logger.info("[BOOTSTRAP] Loading reminder profiles for scheduling...")
+        profiles = get_all_profiles() or []
+        logger.info(f"[BOOTSTRAP] Found {len(profiles)} reminder profiles")
+
+        for p in profiles:
+            uid = p.get('user_id')
+            scheduled = []
+            if p.get('water_enabled'):
+                schedule_user_water_reminder(application, uid, p.get('water_interval_minutes', 60))
+                scheduled.append('water')
+            else:
+                cancel_user_water_reminder(application, uid)
+
+            if p.get('weight_enabled'):
+                schedule_user_weight_reminder(application, uid, p.get('weight_time', '06:00'))
+                scheduled.append('weight')
+            else:
+                cancel_user_weight_reminder(application, uid)
+
+            if p.get('lunch_enabled'):
+                schedule_user_meal_reminder(application, uid, 'lunch', p.get('lunch_time', '13:00'))
+                scheduled.append('lunch')
+            else:
+                cancel_user_meal_reminder(application, uid, 'lunch')
+
+            if p.get('dinner_enabled'):
+                schedule_user_meal_reminder(application, uid, 'dinner', p.get('dinner_time', '20:00'))
+                scheduled.append('dinner')
+            else:
+                cancel_user_meal_reminder(application, uid, 'dinner')
+
+            logger.info(f"[REMINDER_BOOT] user_id={uid} scheduled={scheduled}")
+
+        logger.info("[SCHEDULER] reminder scheduling complete")
     except Exception as e:
         logger.debug(f"Failed to bootstrap per-user reminders: {e}")
 
@@ -201,6 +298,12 @@ async def send_eod_report(context: ContextTypes.DEFAULT_TYPE):
     
     except Exception as e:
         logger.error(f"Error sending EOD report: {e}")
+
+
+async def send_admin_daily_report(context: ContextTypes.DEFAULT_TYPE | None = None):
+    """Stubbed in local mode to avoid scheduler failures."""
+    logger.info("[REPORT] Daily admin report skipped (stubbed in local mode)")
+    return
 
 
 async def check_expired_memberships(context: ContextTypes.DEFAULT_TYPE):

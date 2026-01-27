@@ -17,12 +17,30 @@ from telegram.ext import (
 from src.invoices_v2.state import InvoiceV2State
 from src.invoices_v2.store import search_item, load_items
 from src.invoices_v2.utils import search_users, get_gst_config, calculate_gst, format_user_display
+from src.database.ar_operations import (
+    create_receivable,
+    create_transactions,
+    get_receivable_by_source,
+    update_receivable_status,
+)
 from src.utils.auth import is_admin
+from src.utils.flow_manager import (
+    set_active_flow, clear_active_flow, check_flow_ownership,
+    FLOW_INVOICE_V2_CREATE
+)
 
 
 logger = logging.getLogger(__name__)
 
 INVOICES_FILE = "data/invoices_v2.json"
+
+
+def ensure_payment_tracking_fields(invoice_data: dict) -> dict:
+    """Ensure payment tracking fields exist for invoice JSON."""
+    invoice_data.setdefault("paid_amount", 0)
+    if not isinstance(invoice_data.get("payment_lines"), list):
+        invoice_data["payment_lines"] = []
+    return invoice_data
 
 
 def ensure_invoices_file():
@@ -59,6 +77,7 @@ def save_invoice(invoice_data: dict) -> str:
     
     invoice_data["invoice_id"] = invoice_id
     invoice_data["created_at"] = datetime.now().isoformat()
+    ensure_payment_tracking_fields(invoice_data)
     
     invoices.append(invoice_data)
     save_invoices(invoices)
@@ -83,6 +102,9 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         logger.info(f"[INVOICE_V2] entry_point command_received admin={admin_id}")
 
+    # CRITICAL: Lock INVOICE_V2_CREATE flow to prevent interference from other flows
+    set_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
+
     # CRITICAL: Clear any stale states before starting Invoice flow
     # NOTE: Do NOT call clear_stale_states() as it returns ConversationHandler.END and kills this flow!
     # Instead, manually clear user_data and continue
@@ -92,6 +114,7 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     if not is_admin(admin_id):
         await update.effective_user.send_message("❌ Admin access required")
+        clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
         return ConversationHandler.END
     
     logger.info(f"[INVOICE_V2] entry_point_success admin={admin_id}")
@@ -142,8 +165,14 @@ async def search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def handle_user_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle user search query"""
-    query = update.message.text
     admin_id = update.effective_user.id
+    
+    # CRITICAL: Check flow ownership
+    if not check_flow_ownership(admin_id, FLOW_INVOICE_V2_CREATE):
+        await update.effective_user.send_message("❌ Invalid context. Please use /menu to start over.")
+        return ConversationHandler.END
+    
+    query = update.message.text
     
     logger.info(f"[INVOICE_V2] handle_user_search CALLED state=SEARCH_USER admin={admin_id} query={query}")
     
@@ -183,6 +212,11 @@ async def handle_user_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     admin_id = query.from_user.id
     
+    # CRITICAL: Check flow ownership
+    if not check_flow_ownership(admin_id, FLOW_INVOICE_V2_CREATE):
+        await query.answer("❌ Invalid context.", show_alert=True)
+        return ConversationHandler.END
+    
     await query.answer()
     
     # Extract index from callback_data
@@ -199,7 +233,7 @@ async def handle_user_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Save selected user
     context.user_data["invoice_v2_data"]["selected_user"] = selected_user
     
-    logger.info(f"[INVOICE_V2] user_selected admin={admin_id} user_id={selected_user.get('telegram_id')}")
+    logger.info(f"[INVOICE_V2] user_selected admin={admin_id} user_id={selected_user.get('telegram_id') or selected_user.get('user_id')}")
     
     # Move to item mode
     user_display = format_user_display(selected_user)
@@ -553,15 +587,21 @@ async def handle_send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     admin_id = query.from_user.id
     
+    # CRITICAL: Check flow ownership
+    if not check_flow_ownership(admin_id, FLOW_INVOICE_V2_CREATE):
+        await query.answer("❌ Invalid context.", show_alert=True)
+        return ConversationHandler.END
+    
     await query.answer()
     
     if query.data == "inv2_cancel":
         await query.edit_message_text("❌ Invoice cancelled.")
+        clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
         return ConversationHandler.END
     
     invoice_data = context.user_data["invoice_v2_data"]
     selected_user = invoice_data["selected_user"]
-    user_id = selected_user["telegram_id"]
+    user_id = selected_user.get("telegram_id") or selected_user.get("user_id")
     user_name = format_user_display(selected_user)
     
     # Save invoice
@@ -654,6 +694,9 @@ Actions:
     # Confirm to admin
     await query.edit_message_text(f"✅ Invoice {invoice_id} sent to user and admin!")
     
+    # CRITICAL: Clear invoice flow lock on successful completion
+    clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
+    
     return ConversationHandler.END
 
 
@@ -663,12 +706,18 @@ Actions:
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle cancel at any point"""
+    admin_id = (update.callback_query.from_user.id if update.callback_query 
+                else update.effective_user.id)
+    
     query = update.callback_query
     if query:
         await query.answer()
         await query.edit_message_text("❌ Invoice cancelled.")
     else:
         await update.effective_user.send_message("❌ Cancelled.")
+    
+    # CRITICAL: Clear invoice flow lock
+    clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
     
     return ConversationHandler.END
 
@@ -774,6 +823,513 @@ Actions:
             logger.info(f"[INVOICE_V2] reject_notified_admin invoice_id={invoice_id} admin_id={admin_id}")
         except Exception as e:
             logger.error(f"[INVOICE_V2] failed_notify_admin invoice_id={invoice_id} error={e}")
+
+
+# ============================================================================
+# INVOICE PAYMENT HANDLERS
+# ============================================================================
+
+async def handle_invoice_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle payment method selection for invoice (UPI/Cash)"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    await query.answer()
+    
+    payment_method_data = query.data  # pay_method_upi, pay_method_cash, or pay_method_cancel
+    
+    # Check if this is for an invoice
+    invoice_id = context.user_data.get("pending_invoice_v2")
+    
+    if not invoice_id:
+        await query.edit_message_text("❌ Invoice session expired. Please try again.")
+        return
+    
+    # Load invoice
+    invoices = load_invoices()
+    invoice = next((inv for inv in invoices if inv.get("invoice_id") == invoice_id), None)
+    if invoice:
+        invoice = ensure_payment_tracking_fields(invoice)
+    
+    if not invoice:
+        await query.edit_message_text("❌ Invoice not found.")
+        return
+    
+    # Handle cancel
+    if payment_method_data == "pay_method_cancel":
+        await query.edit_message_text("❌ Payment cancelled.")
+        context.user_data.pop("pending_invoice_v2", None)
+        return
+    
+    # Extract payment method
+    payment_method = payment_method_data.split("_")[-1]  # 'upi' or 'cash'
+    
+    logger.info(f"[INVOICE_V2] payment_method_selected invoice_id={invoice_id} user_id={user_id} method={payment_method}")
+    
+    if payment_method == "cash":
+        # Handle cash payment
+        await handle_invoice_cash_payment(query, context, invoice, invoice_id, user_id)
+    
+    elif payment_method == "upi":
+        # Handle UPI payment
+        await handle_invoice_upi_payment(query, context, invoice, invoice_id, user_id)
+    
+    else:
+        await query.edit_message_text("❌ Invalid payment method")
+
+
+async def handle_invoice_cash_payment(query, context, invoice, invoice_id, user_id):
+    """Process cash payment for invoice"""
+    ensure_payment_tracking_fields(invoice)
+    # Update invoice with payment info
+    invoice["payment_status"] = "pending_cash"
+    invoice["payment_method"] = "cash"
+    invoice["payment_initiated_at"] = datetime.now().isoformat()
+    if not invoice.get("payment_lines"):
+        invoice["payment_lines"] = [
+            {
+                "amount": invoice.get("final_total", 0),
+                "payment_method": "cash",
+                "reference": None,
+                "confirmed_by_admin_id": None,
+                "confirmed_at": None,
+            }
+        ]
+    
+    invoices = load_invoices()
+    for idx, inv in enumerate(invoices):
+        if inv.get("invoice_id") == invoice_id:
+            invoices[idx] = invoice
+            break
+    save_invoices(invoices)
+    
+    # Notify user
+    await query.edit_message_text(
+        f"✅ *Cash Payment - Awaiting Confirmation*\n\n"
+        f"Invoice ID: `{invoice_id}`\n"
+        f"Amount: ₹{invoice['final_total']}\n"
+        f"Payment Method: 💵 Cash\n\n"
+        f"Your payment request has been submitted.\n"
+        f"Please contact the admin or visit the gym to complete the payment.\n"
+        f"You will be notified once confirmed. 🎉",
+        parse_mode="Markdown"
+    )
+    
+    # Notify admin
+    admin_id = invoice.get("created_by")
+    if admin_id:
+        try:
+            admin_text = (
+                f"💵 *Cash Payment Request - Invoice*\n\n"
+                f"Invoice ID: `{invoice_id}`\n"
+                f"User: {invoice.get('user_name')}\n"
+                f"Amount: ₹{invoice['final_total']}\n"
+                f"Payment Method: 💵 Cash\n\n"
+                f"*Action:* Verify cash received and confirm below."
+            )
+            
+            admin_kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Confirm Payment", callback_data=f"inv2_confirm_cash_{invoice_id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"inv2_reject_cash_{invoice_id}")
+                ]
+            ])
+            
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                reply_markup=admin_kb,
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] cash_payment_notified admin={admin_id} invoice_id={invoice_id}")
+        except Exception as e:
+            logger.error(f"[INVOICE_V2] failed_notify_admin_cash invoice_id={invoice_id} error={e}")
+    
+    # Clean up context
+    context.user_data.pop("pending_invoice_v2", None)
+
+
+async def handle_invoice_upi_payment(query, context, invoice, invoice_id, user_id):
+    """Process UPI payment for invoice"""
+    from src.utils.upi_qrcode import generate_upi_qr_code, get_upi_id
+    
+    amount = invoice['final_total']
+    user_name = invoice.get('user_name', query.from_user.full_name)
+    transaction_ref = f"INV{invoice_id}{int(datetime.now().timestamp())}"
+
+    ensure_payment_tracking_fields(invoice)
+    
+    # Generate UPI QR code
+    qr_bytes = generate_upi_qr_code(amount, user_name, transaction_ref)
+    
+    if not qr_bytes:
+        await query.edit_message_text(
+            "❌ Error generating UPI QR code. Please try cash payment instead."
+        )
+        return
+    
+    # Update invoice with payment info
+    invoice["payment_status"] = "pending_upi"
+    invoice["payment_method"] = "upi"
+    invoice["payment_initiated_at"] = datetime.now().isoformat()
+    invoice["transaction_ref"] = transaction_ref
+    if not invoice.get("payment_lines"):
+        invoice["payment_lines"] = [
+            {
+                "amount": invoice.get("final_total", 0),
+                "payment_method": "upi",
+                "reference": transaction_ref,
+                "confirmed_by_admin_id": None,
+                "confirmed_at": None,
+            }
+        ]
+    
+    invoices = load_invoices()
+    for idx, inv in enumerate(invoices):
+        if inv.get("invoice_id") == invoice_id:
+            invoices[idx] = invoice
+            break
+    save_invoices(invoices)
+    
+    # Store in context for screenshot upload
+    context.user_data['invoice_payment_screenshot'] = {
+        'invoice_id': invoice_id,
+        'transaction_ref': transaction_ref
+    }
+    
+    # Get UPI ID
+    upi_id = get_upi_id()
+    
+    # Send QR code to user
+    keyboard = [
+        [InlineKeyboardButton("📸 Upload Screenshot", callback_data=f"inv2_upload_screenshot_{invoice_id}")],
+        [InlineKeyboardButton("⏭️ Skip for Now", callback_data=f"inv2_skip_screenshot_{invoice_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="inv2_payment_cancel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    caption = (
+        f"*📱 UPI Payment for Invoice*\n\n"
+        f"Invoice ID: `{invoice_id}`\n"
+        f"Amount: ₹{amount}\n"
+        f"Reference: `{transaction_ref}`\n\n"
+        f"*UPI ID:* `{upi_id}`\n"
+        f"_(Tap to copy)_\n\n"
+        f"*How to Pay:*\n"
+        f"1️⃣ Scan the QR code below with any UPI app\n"
+        f"2️⃣ OR Copy the UPI ID above and pay via PhonePe/GPay/Paytm\n"
+        f"3️⃣ Enter amount: ₹{amount}\n\n"
+        f"After payment, upload the screenshot for verification.\n"
+        f"Or click 'Skip for Now' to submit without screenshot."
+    )
+    
+    await query.message.reply_photo(
+        photo=qr_bytes,
+        caption=caption,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    
+    # Delete the payment method selection message
+    try:
+        await query.message.delete()
+    except:
+        pass
+    
+    # Clean up context
+    context.user_data.pop("pending_invoice_v2", None)
+    
+    logger.info(f"[INVOICE_V2] upi_qr_sent invoice_id={invoice_id} user_id={user_id} ref={transaction_ref}")
+
+
+async def handle_invoice_screenshot_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle screenshot upload for invoice UPI payment"""
+    query = update.callback_query
+    invoice_id = query.data.split("_")[-1]
+    
+    await query.answer()
+    await query.edit_message_caption(
+        caption=query.message.caption + "\n\n📸 *Please send the payment screenshot now.*",
+        parse_mode="Markdown"
+    )
+
+
+async def handle_invoice_screenshot_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle skipping screenshot upload for invoice"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    invoice_id = query.data.split("_")[-1]
+    
+    await query.answer()
+    
+    # Load invoice
+    invoices = load_invoices()
+    invoice = next((inv for inv in invoices if inv.get("invoice_id") == invoice_id), None)
+    
+    if not invoice:
+        await query.edit_message_caption("❌ Invoice not found.")
+        return
+    
+    # Update status to pending admin verification
+    invoice["payment_status"] = "pending_verification"
+    for idx, inv in enumerate(invoices):
+        if inv.get("invoice_id") == invoice_id:
+            invoices[idx] = invoice
+            break
+    save_invoices(invoices)
+    
+    # Notify user
+    await query.edit_message_caption(
+        caption=(
+            f"✅ *Payment Submitted for Verification*\n\n"
+            f"Invoice ID: `{invoice_id}`\n"
+            f"Amount: ₹{invoice['final_total']}\n"
+            f"Reference: `{invoice.get('transaction_ref')}`\n\n"
+            f"Your payment will be verified by the admin.\n"
+            f"You'll be notified once confirmed. 🎉"
+        ),
+        parse_mode="Markdown"
+    )
+    
+    # Notify admin
+    admin_id = invoice.get("created_by")
+    if admin_id:
+        try:
+            admin_text = (
+                f"💳 *UPI Payment Verification - Invoice*\n\n"
+                f"Invoice ID: `{invoice_id}`\n"
+                f"User: {invoice.get('user_name')}\n"
+                f"Amount: ₹{invoice['final_total']}\n"
+                f"Reference: `{invoice.get('transaction_ref')}`\n"
+                f"Screenshot: Not provided\n\n"
+                f"*Action:* Verify UPI transaction and confirm below."
+            )
+            
+            admin_kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Confirm Payment", callback_data=f"inv2_confirm_upi_{invoice_id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"inv2_reject_upi_{invoice_id}")
+                ]
+            ])
+            
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                reply_markup=admin_kb,
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] upi_verification_notified admin={admin_id} invoice_id={invoice_id}")
+        except Exception as e:
+            logger.error(f"[INVOICE_V2] failed_notify_admin_upi invoice_id={invoice_id} error={e}")
+    
+    # Clean up context
+    context.user_data.pop("invoice_payment_screenshot", None)
+
+
+async def handle_invoice_payment_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin confirms invoice payment (cash or UPI)"""
+    query = update.callback_query
+    admin_id = query.from_user.id
+    
+    # Extract payment method and invoice_id: inv2_confirm_cash_ABC123 or inv2_confirm_upi_ABC123
+    parts = query.data.split("_")
+    payment_method = parts[2]  # 'cash' or 'upi'
+    invoice_id = parts[3]
+    
+    await query.answer()
+    
+    # Load invoice
+    invoices = load_invoices()
+    invoice = next((inv for inv in invoices if inv.get("invoice_id") == invoice_id), None)
+    if invoice:
+        invoice = ensure_payment_tracking_fields(invoice)
+
+    if not invoice:
+        await query.edit_message_text("❌ Invoice not found.")
+        return
+
+    confirmation_ts = datetime.now().isoformat()
+
+    # Mirror into AR ledger (create/fetch receivable, then add transaction) using payment_lines only
+    user_id = invoice.get("user_id")
+    amount = float(invoice.get("final_total", 0))
+    due_date = invoice.get("due_date")
+
+    source_id = None
+    try:
+        source_id = int(invoice_id)
+    except Exception:
+        source_id = None  # invoice_id may be non-numeric; keep AR safe
+
+    payment_lines = invoice.get("payment_lines") or []
+    pending_lines = []
+    for line in payment_lines:
+        method = line.get("payment_method") or line.get("method")
+        amt = float(line.get("amount", 0)) if isinstance(line, dict) else 0
+        if not method or amt <= 0:
+            continue
+        if line.get("confirmed_at"):
+            continue
+        pending_lines.append(
+            {
+                "method": method,
+                "amount": amt,
+                "reference": line.get("reference"),
+            }
+        )
+
+    receivable = {}
+    rid = None
+    if user_id:
+        receivable = get_receivable_by_source("invoice", source_id) if source_id is not None else {}
+        if not receivable:
+            receivable = create_receivable(
+                user_id=user_id,
+                receivable_type="invoice",
+                source_id=source_id,
+                bill_amount=amount,
+                discount_amount=0.0,
+                final_amount=amount,
+                due_date=due_date,
+            )
+
+        rid = receivable.get("receivable_id") if receivable else None
+        if rid:
+            if pending_lines:
+                create_transactions(rid, pending_lines, admin_user_id=admin_id)
+            update_receivable_status(rid)
+            invoice["receivable_id"] = rid
+
+    confirmed_amount = 0
+    for line in payment_lines:
+        method = line.get("payment_method") or line.get("method")
+        amt = float(line.get("amount", 0)) if isinstance(line, dict) else 0
+        if not method or amt <= 0:
+            continue
+        if line.get("confirmed_at"):
+            confirmed_amount += amt
+            continue
+        line["confirmed_by_admin_id"] = admin_id
+        line["confirmed_at"] = confirmation_ts
+        confirmed_amount += amt
+
+    invoice["paid_amount"] = round(confirmed_amount, 2)
+    if invoice["paid_amount"] >= invoice.get("final_total", 0):
+        invoice["payment_status"] = "paid"
+    elif invoice["paid_amount"] > 0:
+        invoice["payment_status"] = "partial"
+    else:
+        invoice["payment_status"] = invoice.get("payment_status", "pending_verification")
+    if invoice["paid_amount"] > 0:
+        invoice["paid_at"] = confirmation_ts
+        invoice["verified_by"] = admin_id
+    
+    for idx, inv in enumerate(invoices):
+        if inv.get("invoice_id") == invoice_id:
+            invoices[idx] = invoice
+            break
+    save_invoices(invoices)
+    
+    # Update admin message
+    methods_summary = ", ".join(
+        f"{line.get('payment_method') or line.get('method')} ₹{line.get('amount')}"
+        for line in invoice.get("payment_lines", [])
+        if line.get("confirmed_at")
+    )
+    confirmed_display = invoice.get("paid_amount", invoice.get("final_total", 0))
+    await query.edit_message_text(
+        f"✅ *Payment Confirmed*\n\n"
+        f"Invoice ID: `{invoice_id}`\n"
+        f"Amount: ₹{confirmed_display} of ₹{invoice.get('final_total', confirmed_display)}\n"
+        f"Method(s): {methods_summary or payment_method.upper()}\n"
+        f"Verified by: Admin {admin_id}\n"
+        f"Confirmed at: {datetime.now().strftime('%d-%m-%Y %H:%M')}",
+        parse_mode="Markdown"
+    )
+    
+    # Notify user
+    user_id = invoice.get("user_id")
+    if user_id:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"🎉 *Payment Confirmed!*\n\n"
+                    f"Invoice ID: `{invoice_id}`\n"
+                    f"Amount: ₹{confirmed_display} of ₹{invoice.get('final_total', confirmed_display)}\n"
+                    f"Method(s): {methods_summary or payment_method.upper()}\n\n"
+                    f"Thank you for your payment! ✅"
+                ),
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] payment_confirmed_notification_sent user_id={user_id} invoice_id={invoice_id}")
+        except Exception as e:
+            logger.error(f"[INVOICE_V2] failed_notify_user_payment_confirmed invoice_id={invoice_id} error={e}")
+    
+    logger.info(f"[INVOICE_V2] payment_confirmed invoice_id={invoice_id} method={payment_method} admin={admin_id}")
+
+
+async def handle_invoice_payment_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin rejects invoice payment"""
+    query = update.callback_query
+    admin_id = query.from_user.id
+    
+    # Extract payment method and invoice_id: inv2_reject_cash_ABC123 or inv2_reject_upi_ABC123
+    parts = query.data.split("_")
+    payment_method = parts[2]  # 'cash' or 'upi'
+    invoice_id = parts[3]
+    
+    await query.answer()
+    
+    # Load invoice
+    invoices = load_invoices()
+    invoice = next((inv for inv in invoices if inv.get("invoice_id") == invoice_id), None)
+    
+    if not invoice:
+        await query.edit_message_text("❌ Invoice not found.")
+        return
+    
+    # Update invoice status
+    invoice["payment_status"] = "payment_rejected"
+    invoice["payment_rejected_at"] = datetime.now().isoformat()
+    invoice["rejected_by"] = admin_id
+    
+    for idx, inv in enumerate(invoices):
+        if inv.get("invoice_id") == invoice_id:
+            invoices[idx] = invoice
+            break
+    save_invoices(invoices)
+    
+    # Update admin message
+    await query.edit_message_text(
+        f"❌ *Payment Rejected*\n\n"
+        f"Invoice ID: `{invoice_id}`\n"
+        f"Amount: ₹{invoice['final_total']}\n"
+        f"Payment Method: {payment_method.upper()}\n"
+        f"Rejected by: Admin {admin_id}",
+        parse_mode="Markdown"
+    )
+    
+    # Notify user
+    user_id = invoice.get("user_id")
+    if user_id:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"❌ *Payment Not Verified*\n\n"
+                    f"Invoice ID: `{invoice_id}`\n"
+                    f"Amount: ₹{invoice['final_total']}\n\n"
+                    f"Your payment could not be verified.\n"
+                    f"Please contact the admin for more details."
+                ),
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] payment_rejected_notification_sent user_id={user_id} invoice_id={invoice_id}")
+        except Exception as e:
+            logger.error(f"[INVOICE_V2] failed_notify_user_payment_rejected invoice_id={invoice_id} error={e}")
+    
+    logger.info(f"[INVOICE_V2] payment_rejected invoice_id={invoice_id} method={payment_method} admin={admin_id}")
 
 
 # ============================================================================

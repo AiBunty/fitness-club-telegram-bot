@@ -1,12 +1,12 @@
 import logging
-from src.utils.user_registry import search_registry
+from src.database.user_operations import search_users as db_search_users
 
 logger = logging.getLogger(__name__)
 
 
 def search_users(term: str):
     logger.info(f"[INVOICE] user_search term='{term}'")
-    return search_registry(term, limit=10)
+    return db_search_users(term, limit=10)
 
 
 def format_invoice_text(invoice: dict) -> str:

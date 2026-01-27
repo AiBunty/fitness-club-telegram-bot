@@ -235,8 +235,18 @@ def get_subscription_request_details(request_id: int) -> dict:
     return None
 
 
-def approve_subscription(request_id: int, amount: int, end_date: datetime) -> bool:
-    """Approve a subscription request and activate subscription"""
+def approve_subscription(
+    request_id: int,
+    amount: int,
+    end_date: datetime,
+    payment_lines: list | None = None,
+    admin_user_id: int | None = None,
+) -> bool:
+    """Approve a subscription request and activate subscription.
+
+    payment_lines: optional list of {method, amount, reference} to mirror into AR.
+    admin_user_id: optional admin ID to stamp AR transactions.
+    """
     try:
         # Get the request details
         request = execute_query(
@@ -305,6 +315,38 @@ def approve_subscription(request_id: int, amount: int, end_date: datetime) -> bo
             (user_id,),
         )
         logger.info(f"User {user_id} fee_status updated to 'paid' on subscription approval")
+
+        # Mirror payment lines into AR ledger when provided
+        receivable_id = receivable.get("receivable_id") if receivable else None
+        if receivable_id and payment_lines:
+            # Only persist valid lines with amount > 0 and a payment method
+            valid_lines = []
+            for line in payment_lines:
+                method = line.get("method") if isinstance(line, dict) else None
+                amt = float(line.get("amount", 0)) if isinstance(line, dict) else 0
+                if not method or amt <= 0:
+                    continue
+                valid_lines.append(
+                    {
+                        "method": method,
+                        "amount": amt,
+                        "reference": line.get("reference") if isinstance(line, dict) else None,
+                    }
+                )
+
+            if valid_lines:
+                create_transactions(
+                    receivable_id=receivable_id,
+                    lines=valid_lines,
+                    admin_user_id=admin_user_id,
+                )
+                update_receivable_status(receivable_id)
+                logger.info(
+                    "AR transactions recorded on approval: request_id=%s receivable_id=%s lines=%s",
+                    request_id,
+                    receivable_id,
+                    len(valid_lines),
+                )
         
         logger.info(f"Subscription approved for user {user_id}: Amount {amount}, End Date {end_date}")
         return True

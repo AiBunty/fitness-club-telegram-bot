@@ -443,6 +443,19 @@ async def list_store_products(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def cmd_user_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """User: View store products"""
+    # Require full access (registered + active subscription)
+    try:
+        from src.utils.access_gate import check_app_feature_access
+        if not await check_app_feature_access(update, context):
+            return ConversationHandler.END
+    except Exception:
+        # Fail safe: if gate fails unexpectedly, block and inform user
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text("❌ Access check failed. Try again later.")
+        else:
+            await update.message.reply_text("❌ Access check failed. Try again later.")
+        return ConversationHandler.END
     # Handle both command and callback contexts
     if update.callback_query:
         await update.callback_query.answer()

@@ -12,131 +12,9 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     CallbackQueryHandler,
-    filters
+    filters,
 )
-from src.handlers.store_user_handlers import get_store_conversation_handler
-from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
-from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
-from src.database.store_operations import create_or_update_product  # For migration check
 from src.config import TELEGRAM_BOT_TOKEN, USE_LOCAL_DB
-from src.database.connection import test_connection
-from src.handlers.user_handlers import (
-    start_command, begin_registration, get_name, get_phone, get_age, 
-    get_weight, get_gender, get_profile_pic, cancel_registration, registration_timeout,
-    menu_command, cmd_qrcode, NAME, PHONE, AGE, WEIGHT, GENDER, PROFILE_PIC,
-    handle_location_for_checkin, handle_greeting
-)
-from src.handlers.role_keyboard_handlers import (
-    show_role_menu
-)
-from src.handlers.callback_handlers import handle_callback_query
-from src.handlers.debug_handlers import raw_update_logger
-from src.handlers.activity_handlers import (
-    cmd_weight, get_weight_input, WEIGHT_VALUE,
-    cmd_water, get_water, WATER_CUPS,
-    cmd_meal, get_meal_photo, MEAL_PHOTO,
-    cmd_habits, get_habits_confirm, HABITS_CONFIRM,
-    cmd_checkin, get_checkin_method, get_checkin_photo, CHECKIN_METHOD, CHECKIN_PHOTO,
-    cancel_activity
-)
-from src.handlers.admin_handlers import (
-    cmd_pending_attendance, cmd_pending_shakes,
-    callback_review_attendance, callback_review_shakes,
-    callback_approve_attend, callback_reject_attend,
-    callback_ready_shake, callback_cancel_shake,
-    cmd_add_staff, cmd_remove_staff, cmd_list_staff, handle_staff_id_input,
-    cmd_add_admin, cmd_remove_admin, cmd_list_admins,
-    callback_approve_user, callback_reject_user, cmd_pending_users,
-    cmd_manual_shake_deduction, get_manual_shake_deduction_handler,
-    cmd_qr_attendance_link, cmd_override_attendance, cmd_download_qr_code
-)
-from src.handlers.analytics_handlers import (
-    cmd_admin_dashboard, handle_analytics_callback,
-    callback_revenue_stats, callback_member_stats, 
-    callback_engagement_stats, callback_challenge_stats,
-    callback_top_activities, callback_admin_dashboard
-)
-from src.handlers.admin_dashboard_handlers import (
-    cmd_admin_panel, cmd_member_list, cmd_manage_users, cmd_export_excel,
-    callback_back_to_admin_panel, get_manage_users_conversation_handler, get_template_conversation_handler, get_followup_conversation_handler
-)
-from src.handlers.payment_handlers import (
-    cmd_challenges, callback_pay_fee,
-    get_payment_amount, get_payment_method, confirm_payment,
-    callback_join_challenge, callback_challenge_leaderboard,
-    callback_close, cancel_payment, PAYMENT_AMOUNT, PAYMENT_METHOD, 
-    PAYMENT_CONFIRM
-)
-from src.handlers.notification_handlers import (
-    cmd_notifications, callback_view_notification, callback_delete_notification,
-    callback_mark_all_read, callback_notification_back, callback_close_notifications,
-    callback_admin_pending_subs, callback_admin_pending_payments, callback_admin_my_notifs
-)
-from src.handlers.challenge_handlers import (
-    cmd_challenges, cmd_my_challenges, callback_challenge_view,
-    callback_challenge_join, callback_challenge_progress, 
-    callback_challenge_leaderboard, callback_challenge_back, 
-    callback_challenge_close, register_challenge_callbacks
-)
-from src.handlers.admin_challenge_handlers import (
-    cmd_admin_challenges, callback_create_challenge, process_challenge_name,
-    callback_challenge_type, process_start_date, process_end_date,
-    callback_challenge_pricing, process_entry_amount, process_challenge_desc,
-    callback_confirm_create, callback_cancel_create, callback_view_active_challenges,
-    callback_payment_status, callback_challenge_stats, get_admin_challenge_handler
-)
-from src.handlers.misc_handlers import cmd_whoami
-from src.handlers.broadcast_handlers import (
-    get_broadcast_conversation_handler, cmd_followup_settings,
-    view_broadcast_history, send_followup_to_inactive_users,
-    cmd_tune_followup_settings, callback_tune_followup_interval
-)
-from src.handlers.payment_request_handlers import (
-    payment_request_conversation, approval_conversation,
-    cmd_pending_requests, callback_review_request, callback_reject_request
-)
-from src.handlers.report_handlers import (
-    cmd_reports_menu, callback_report_overview, callback_report_active,
-    callback_report_inactive, callback_report_expiring, callback_report_today,
-    callback_report_top_performers, callback_report_inactive_users,
-    callback_report_eod, callback_export_active, callback_export_inactive,
-    callback_report_export, callback_move_expired
-)
-from src.handlers.subscription_handlers import (
-    cmd_subscribe, cmd_my_subscription, cmd_admin_subscriptions,
-    callback_admin_approve_sub, callback_approve_sub_standard,
-    callback_custom_amount, callback_select_end_date, callback_reject_sub,
-    get_subscription_conversation_handler, get_admin_approval_conversation_handler,
-    callback_admin_reject_upi, callback_admin_reject_cash
-)
-from src.invoices.handlers import get_invoice_conversation_handler
-from src.handlers.ar_handlers import (
-    get_ar_conversation_handler, ar_export_overdue, ar_credit_summary
-)
-from src.handlers.admin_settings_handlers import (
-    cmd_admin_settings, get_admin_settings_handler
-)
-from src.handlers.reminder_settings_handlers import (
-    cmd_reminders, get_reminder_conversation_handler
-)
-from src.utils.scheduled_jobs import (
-    send_eod_report, check_expired_memberships,
-    send_water_reminder_hourly, send_weight_reminder_morning, send_habits_reminder_evening,
-    send_shake_credit_reminders
-)
-from src.utils.monitoring import (
-    check_overdue_reminder_spike, check_bulk_expiry_candidates, send_alert_to_admin
-)
-from src.utils.subscription_scheduler import (
-    send_expiry_reminders, send_grace_period_reminders,
-    send_followup_reminders, lock_expired_subscriptions
-)
-
-# Create logs directory if it doesn't exist
-os.makedirs('logs', exist_ok=True)
-
-# Configure logging with rotating file handler to prevent disk space issues
-# Max 10MB per file, keep 5 backup files = max 60MB total
 file_handler = RotatingFileHandler(
     'logs/fitness_bot.log',
     maxBytes=10*1024*1024,  # 10MB
@@ -286,11 +164,134 @@ async def set_commands_for_user(user_id: int, bot) -> None:
         logger.error(f"Error setting commands for user {user_id}: {e}")
 
 
-def main():
+def main(start: bool = False):
+
+    # Import application-specific modules here to avoid import-time side-effects
+    # when other tools import `src.bot` for diagnostics.
+    from src.database.connection import test_connection
+    from src.handlers.store_user_handlers import get_store_conversation_handler
+    from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
+    from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
+    from src.database.store_operations import create_or_update_product  # For migration check
+    from src.handlers.user_handlers import (
+        start_command, begin_registration, get_name, get_phone, get_age, 
+        get_weight, get_gender, get_profile_pic, cancel_registration, registration_timeout,
+        menu_command, cmd_qrcode, NAME, PHONE, AGE, WEIGHT, GENDER, PROFILE_PIC,
+        handle_location_for_checkin, handle_greeting
+    )
+    from src.handlers.role_keyboard_handlers import (
+        show_role_menu
+    )
+    from src.handlers.callback_handlers import handle_callback_query
+    from src.handlers.debug_handlers import raw_update_logger
+    from src.handlers.activity_handlers import (
+        cmd_weight, get_weight_input, WEIGHT_VALUE,
+        cmd_water, get_water, WATER_CUPS,
+        cmd_meal, get_meal_photo, MEAL_PHOTO,
+        cmd_habits, get_habits_confirm, HABITS_CONFIRM,
+        cmd_checkin, get_checkin_method, get_checkin_photo, CHECKIN_METHOD, CHECKIN_PHOTO,
+        cancel_activity
+    )
+    from src.handlers.admin_handlers import (
+        cmd_pending_attendance, cmd_pending_shakes,
+        callback_review_attendance, callback_review_shakes,
+        callback_approve_attend, callback_reject_attend,
+        callback_ready_shake, callback_cancel_shake,
+        cmd_add_staff, cmd_remove_staff, cmd_list_staff, handle_staff_id_input,
+        cmd_add_admin, cmd_remove_admin, cmd_list_admins,
+        callback_approve_user, callback_reject_user, cmd_pending_users,
+        cmd_manual_shake_deduction, get_manual_shake_deduction_handler,
+        cmd_qr_attendance_link, cmd_override_attendance, cmd_download_qr_code
+    )
+    from src.handlers.analytics_handlers import (
+        cmd_admin_dashboard, handle_analytics_callback,
+        callback_revenue_stats, callback_member_stats, 
+        callback_engagement_stats, callback_challenge_stats,
+        callback_top_activities, callback_admin_dashboard
+    )
+    from src.handlers.admin_dashboard_handlers import (
+        cmd_admin_panel, cmd_member_list, cmd_manage_users, cmd_export_excel,
+        callback_back_to_admin_panel, get_manage_users_conversation_handler, get_template_conversation_handler, get_followup_conversation_handler
+    )
+    from src.handlers.payment_handlers import (
+        cmd_challenges, callback_pay_fee,
+        get_payment_amount, get_payment_method, confirm_payment,
+        callback_join_challenge, callback_challenge_leaderboard,
+        callback_close, cancel_payment, PAYMENT_AMOUNT, PAYMENT_METHOD, 
+        PAYMENT_CONFIRM
+    )
+    from src.handlers.notification_handlers import (
+        cmd_notifications, callback_view_notification, callback_delete_notification,
+        callback_mark_all_read, callback_notification_back, callback_close_notifications,
+        callback_admin_pending_subs, callback_admin_pending_payments, callback_admin_my_notifs
+    )
+    from src.handlers.challenge_handlers import (
+        cmd_challenges, cmd_my_challenges, callback_challenge_view,
+        callback_challenge_join, callback_challenge_progress, 
+        callback_challenge_leaderboard, callback_challenge_back, 
+        callback_challenge_close, register_challenge_callbacks
+    )
+    from src.handlers.admin_challenge_handlers import (
+        cmd_admin_challenges, callback_create_challenge, process_challenge_name,
+        callback_challenge_type, process_start_date, process_end_date,
+        callback_challenge_pricing, process_entry_amount, process_challenge_desc,
+        callback_confirm_create, callback_cancel_create, callback_view_active_challenges,
+        callback_payment_status, callback_challenge_stats, get_admin_challenge_handler
+    )
+    from src.handlers.misc_handlers import cmd_whoami
+    from src.handlers.broadcast_handlers import (
+        get_broadcast_conversation_handler, cmd_followup_settings,
+        view_broadcast_history, send_followup_to_inactive_users,
+        cmd_tune_followup_settings, callback_tune_followup_interval
+    )
+    from src.handlers.payment_request_handlers import (
+        payment_request_conversation, approval_conversation,
+        cmd_pending_requests, callback_review_request, callback_reject_request
+    )
+    from src.handlers.report_handlers import (
+        cmd_reports_menu, callback_report_overview, callback_report_active,
+        callback_report_inactive, callback_report_expiring, callback_report_today,
+        callback_report_top_performers, callback_report_inactive_users,
+        callback_report_eod, callback_export_active, callback_export_inactive,
+        callback_report_export, callback_move_expired
+    )
+    from src.handlers.subscription_handlers import (
+        cmd_subscribe, cmd_my_subscription, cmd_admin_subscriptions,
+        callback_admin_approve_sub, callback_approve_sub_standard,
+        callback_custom_amount, callback_select_end_date, callback_reject_sub,
+        get_subscription_conversation_handler, get_admin_approval_conversation_handler,
+        callback_admin_reject_upi, callback_admin_reject_cash
+    )
+    from src.invoices.handlers import get_invoice_conversation_handler
+    from src.handlers.ar_handlers import (
+        get_ar_conversation_handler, ar_export_overdue, ar_credit_summary,
+        ar_reports_menu, ar_report_dispatch
+    )
+    from src.handlers.admin_settings_handlers import (
+        cmd_admin_settings, get_admin_settings_handler
+    )
+    from src.handlers.admin_welcome_handlers import get_welcome_message_admin_handler
+    from src.handlers.reminder_settings_handlers import (
+        cmd_reminders, get_reminder_conversation_handler
+    )
+    from src.utils.scheduled_jobs import (
+        send_eod_report, send_admin_daily_report, check_expired_memberships,
+        send_water_reminder_hourly, send_weight_reminder_morning, send_habits_reminder_evening,
+        send_shake_credit_reminders
+    )
+    from src.utils.scheduler_manager import run_daily_safe
+    from src.utils.monitoring import (
+        check_overdue_reminder_spike, check_bulk_expiry_candidates, send_alert_to_admin
+    )
+    from src.utils.subscription_scheduler import (
+        send_expiry_reminders, send_grace_period_reminders,
+        send_followup_reminders, lock_expired_subscriptions
+    )
 
     # Skip DB test when running in local-only mode
     if USE_LOCAL_DB:
-        logger.info("USE_LOCAL_DB=true — skipping DB connection test and remote DB usage")
+        logger.info("USE_LOCAL_DB=true - skipping DB connection test and remote DB usage")
+        logger.info("[BOT] started in LOCAL MODE")
     else:
         logger.info("Testing database connection...")
         if os.environ.get('SKIP_DB_TEST') != '1':
@@ -298,14 +299,19 @@ def main():
                 logger.error("Database connection failed!")
                 sys.exit(1)
         else:
-            logger.info("SKIP_DB_TEST=1 set — skipping DB connection test")
-    
+            logger.info("SKIP_DB_TEST=1 set - skipping DB connection test")
+
     logger.info("Database OK! Starting bot...")
-    
+
+    # If no token is available (e.g., local/test mode), skip building the bot entirely
+    if not TELEGRAM_BOT_TOKEN:
+        logger.info("[APP] TELEGRAM_BOT_TOKEN missing or disabled - skipping Application build (local/test mode)")
+        return None
+
     # Reduce socket timeout for faster initialization
     import socket
     socket.setdefaulttimeout(5)
-    
+
     logger.info("[APP] Building Telegram Application with token...")
     # Disable SSL verification as workaround for Windows SSL timeout issues
     import ssl
@@ -313,47 +319,17 @@ def main():
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
-    
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     logger.info("[APP] Telegram Application built successfully")
 
     # Register global command menu so Telegram shows command buttons.
     application.post_init = _set_bot_commands
     
-    # User registry tracking (pre-handler to catch all messages)
-    async def track_user_on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Track user in registry for invoice search - runs on every message.
-        
-        CRITICAL: Must NOT consume update - always allow propagation.
-        """
-        # Skip if not a Message update (e.g., CallbackQuery should never reach here)
-        if not update.message:
-            logger.debug("[TRACKER] Skipping non-message update")
-            return False
-        
-        if not update.effective_user:
-            return False
-        
-        # Track user but DON'T consume the update
-        try:
-            from src.utils.user_registry import track_user
-            track_user(
-                user_id=update.effective_user.id,
-                first_name=update.effective_user.first_name or '',
-                last_name=update.effective_user.last_name or '',
-                username=update.effective_user.username or ''
-            )
-            logger.debug(f"[TRACKER] message tracked user_id={update.effective_user.id}")
-        except Exception as e:
-            logger.debug(f"[TRACKER] Error: {e}")
-        
-        # CRITICAL: Return False to allow other handlers to process this update
-        return False
-    
-    application.add_handler(MessageHandler(filters.ALL, track_user_on_message), group=-1)
+    # user_registry tracking removed - database is single source of truth
+    # application.add_handler(MessageHandler(filters.ALL, track_user_on_message), group=-1)
     
     # Registration conversation
-    # Registration conversation (triggered via /register or Register button)
     registration_handler = ConversationHandler(
         entry_points=[
             CommandHandler('register', begin_registration),
@@ -386,12 +362,13 @@ def main():
         handle_greeting
     ))
 
+    # OLD Invoice v1 - DISABLED (replaced by Invoice v2 with search functionality)
     # Invoice conversation (greenfield implementation)
-    try:
-        application.add_handler(get_invoice_conversation_handler())
-        logger.info("[INVOICE] conversation handler registered")
-    except Exception as e:
-        logger.error(f"[INVOICE] failed to register conversation handler: {e}")
+    # try:
+    #     application.add_handler(get_invoice_conversation_handler())
+    #     logger.info("[INVOICE] conversation handler registered")
+    # except Exception as e:
+    #     logger.error(f"[INVOICE] failed to register conversation handler: {e}")
     
     # Activity logging conversations
     weight_handler = ConversationHandler(
@@ -469,13 +446,13 @@ def main():
     
     logger.info("[BOT] Registering ConversationHandlers (STRICT PRIORITY ORDER)")
     
-    # ⭐ HIGHEST PRIORITY: User Management (BEFORE everything else)
+    # HIGHEST PRIORITY: User Management (BEFORE everything else)
     # Ensures admin User ID entry is NEVER intercepted by Invoice or other flows
-    logger.info("[BOT] ⭐ Registering User Management handlers (PRIORITY 1/7)")
+    logger.info("[BOT] Registering User Management handlers (PRIORITY 1/7)")
     application.add_handler(get_manage_users_conversation_handler())
     application.add_handler(get_template_conversation_handler())
     application.add_handler(get_followup_conversation_handler())
-    logger.info("[BOT] ✅ User Management handlers registered (HIGHEST PRIORITY)")
+    logger.info("[BOT] User Management handlers registered (HIGHEST PRIORITY)")
     
     # PRIORITY 2: Admin Store/GST handlers before Invoice to avoid item text interception
     logger.info("[BOT] Registering Store/GST admin handlers (PRIORITY 2/7)")
@@ -483,25 +460,41 @@ def main():
     gst_conv, store_conv = get_store_and_gst_handlers()
     application.add_handler(store_conv)
     application.add_handler(gst_conv)
-    logger.info("[BOT] ✅ Store/GST handlers registered (BEFORE Invoice)")
+    logger.info("[BOT] Store/GST handlers registered (BEFORE Invoice)")
 
     # Invoice v2 (PRIORITY 3 - after management and store to prevent User ID interception)
     logger.info("[BOT] Registering Invoice v2 handlers (PRIORITY 3/7)")
-    from src.invoices_v2.handlers import get_invoice_v2_handler, handle_pay_bill, handle_reject_bill
+    from src.invoices_v2.handlers import (
+        get_invoice_v2_handler,
+        handle_pay_bill,
+        handle_reject_bill,
+        handle_invoice_payment_method,
+        handle_invoice_screenshot_upload,
+        handle_invoice_screenshot_skip,
+        handle_invoice_payment_confirm,
+        handle_invoice_payment_reject,
+    )
     application.add_handler(get_invoice_v2_handler())
     application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
-    logger.info("[BOT] ✅ Invoice v2 handlers registered (AFTER Management and Store)")
+    application.add_handler(CallbackQueryHandler(handle_invoice_payment_method, pattern=r"^pay_method_(upi|cash|cancel)$"))
+    application.add_handler(CallbackQueryHandler(handle_invoice_screenshot_upload, pattern=r"^inv2_upload_screenshot_"))
+    application.add_handler(CallbackQueryHandler(handle_invoice_screenshot_skip, pattern=r"^inv2_skip_screenshot_"))
+    application.add_handler(CallbackQueryHandler(handle_invoice_payment_confirm, pattern=r"^inv2_confirm_(cash|upi)_"))
+    application.add_handler(CallbackQueryHandler(handle_invoice_payment_reject, pattern=r"^inv2_reject_(cash|upi)_"))
+    logger.info("[BOT] Invoice v2 handlers registered (AFTER Management and Store)")
 
     # Registration and Approval Conversations (PRIORITY 4)
     logger.info("[BOT] Registering Registration handlers (PRIORITY 4/7)")
     application.add_handler(get_subscription_conversation_handler())
     application.add_handler(get_admin_approval_conversation_handler())
-    logger.info("[BOT] ✅ Registration handlers registered")
+    logger.info("[BOT] Registration handlers registered")
     
-    # Accounts Receivable (split-payment) conversation
+    # Accounts Receivable (split-payment + reports)
     application.add_handler(get_ar_conversation_handler())
-    logger.info("[BOT] ✅ AR handlers registered")
+    application.add_handler(CommandHandler('ar_reports', ar_reports_menu))
+    application.add_handler(CallbackQueryHandler(ar_report_dispatch, pattern=r"^ar_report_"))
+    logger.info("[BOT] AR handlers registered")
     
     # Store user-facing handlers
     from src.handlers.store_user_handlers import cmd_store
@@ -509,11 +502,11 @@ def main():
     application.add_handler(get_store_conversation_handler())
     application.add_handler(get_store_admin_conversation_handler())
     application.add_handler(get_store_excel_conversation_handler())
-    logger.info("[BOT] ✅ Store user handlers registered")
+    logger.info("[BOT] Store user handlers registered")
     
     # Broadcast handlers
     application.add_handler(get_broadcast_conversation_handler())
-    logger.info("[BOT] ✅ Broadcast handlers registered")
+    logger.info("[BOT] Broadcast handlers registered")
     
     # Payment request handlers
     application.add_handler(payment_request_conversation)
@@ -546,6 +539,7 @@ def main():
     application.add_handler(CommandHandler('my_subscription', cmd_my_subscription))
     application.add_handler(CommandHandler('admin_subscriptions', cmd_admin_subscriptions))
     application.add_handler(get_admin_settings_handler())
+    application.add_handler(get_welcome_message_admin_handler())
     application.add_handler(get_reminder_conversation_handler())
 
     # DEBUG: log raw incoming updates without blocking conversation handlers
@@ -686,13 +680,16 @@ def main():
     )
     logger.info("Scheduled daily follow-up job at 9:00 AM")
     
-    # EOD Report at 23:55 (11:55 PM)
-    job_queue.run_daily(
-        send_eod_report,
-        time=dt_time(hour=23, minute=55),  # 11:55 PM every day
-        name="eod_report"
-    )
-    logger.info("Scheduled EOD report at 23:55")
+    # EOD Report at 23:55 (11:55 PM) - scheduled safely
+    run_daily_safe(application, send_eod_report, when=dt_time(hour=23, minute=55), name="eod_report")
+    logger.info("Scheduled EOD report at 23:55 (safe)")
+
+    # Admin Daily Report at 08:00 Asia/Kolkata
+    try:
+        run_daily_safe(application, send_admin_daily_report, when=dt_time(hour=8, minute=0), name="admin_daily_report", tz_name="Asia/Kolkata")
+        logger.info("Scheduled Admin daily report at 08:00 Asia/Kolkata")
+    except Exception as e:
+        logger.warning(f"Could not schedule admin daily report: {e}")
     
     # Check expired memberships at 00:01 (12:01 AM)
     job_queue.run_daily(
@@ -884,35 +881,35 @@ def main():
     else:
         logger.info("Skipping Flask web server (SKIP_FLASK=1)")
     
-    logger.info("Bot starting...")
-    logger.info("Bot starting...")
-    logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
-    
-    # ================================================================
-    # START POLLING
-    # ================================================================
-    # Manually control the polling loop to keep bot running
-    import signal
-    import asyncio
-    
-    # Flag to control the polling loop
-    running = True
-    
-    def signal_handler(sig, frame):
-        nonlocal running
-        logger.info("[BOT] Received shutdown signal")
-        running = False
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    try:
-        logger.info("[BOT] Starting polling...")
-        # Allow temporary disabling of polling for local test runs
-        import os
-        if os.getenv('DISABLE_POLLING_FOR_TEST', 'false').lower() in ('1', 'true', 'yes'):
-            logger.info('[BOT] Polling disabled via DISABLE_POLLING_FOR_TEST env var (test mode)')
-        else:
+    # Only start the polling/long-running loop when explicitly requested
+    if start:
+        logger.info("Bot starting...")
+        logger.info(f"Running polling with allowed_updates: {['message', 'callback_query']}")
+
+        # ================================================================
+        # START POLLING
+        # ================================================================
+        # Manually control the polling loop to keep bot running
+        import signal
+        import asyncio
+
+        # Flag to control the polling loop
+        running = True
+
+        def signal_handler(sig, frame):
+            nonlocal running
+            logger.info("[BOT] Received shutdown signal")
+            running = False
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        try:
+            logger.info("[BOT] Starting polling...")
+            # Allow temporary disabling of polling for local test runs
+            if os.getenv('DISABLE_POLLING_FOR_TEST', 'false').lower() in ('1', 'true', 'yes'):
+                logger.info('[BOT] Polling disabled via DISABLE_POLLING_FOR_TEST env var (test mode)')
+            else:
                 # Use run_polling only when explicitly enabled via env var
                 # Default: polling is DISABLED to avoid interfering with test runs.
                 if os.getenv('ENABLE_POLLING', 'false').lower() in ('1', 'true', 'yes'):
@@ -923,19 +920,15 @@ def main():
                 else:
                     logger.info('[BOT] Polling disabled by default. Set ENABLE_POLLING=true to enable in deployed environments')
 
-        logger.info("[BOT] Polling completed - bot will restart via wrapper script")
+            logger.info("[BOT] Polling completed - bot will restart via wrapper script")
 
-    except KeyboardInterrupt:
-        logger.info("[BOT] Interrupted by user (Ctrl+C)")
-    except Exception as e:
-        logger.error(f"[BOT] Error in polling: {type(e).__name__}: {e}", exc_info=True)
-    finally:
-        logger.info("[BOT] Bot shutdown complete")
+        except KeyboardInterrupt:
+            logger.info("[BOT] Interrupted by user (Ctrl+C)")
+        except Exception as e:
+            logger.error(f"[BOT] Error in polling: {type(e).__name__}: {e}", exc_info=True)
+        finally:
+            logger.info("[BOT] Bot shutdown complete")
 
 if __name__ == '__main__':
-    main()
-
-from src.handlers.store_user_handlers import get_store_conversation_handler
-from src.handlers.store_admin_handlers import get_store_admin_conversation_handler
-from src.handlers.store_excel_handlers import get_store_excel_conversation_handler
-from src.database.store_operations import create_or_update_product  # For migration check
+    # When executed as a script we start the full bot loop
+    main(start=True)

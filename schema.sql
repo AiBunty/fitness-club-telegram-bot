@@ -191,3 +191,79 @@ FROM users u
 LEFT JOIN daily_logs dl ON u.user_id = dl.user_id
 WHERE u.fee_status = 'paid'
 ORDER BY u.created_at DESC;
+
+-- ============================================================================
+-- STORE ITEMS TABLE (Required for Invoice System - DB-only)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS store_items (
+    item_id SERIAL PRIMARY KEY,
+    serial_no INT UNIQUE,
+    item_name VARCHAR(255) NOT NULL,
+    normalized_item_name VARCHAR(255),
+    hsn_code VARCHAR(20),
+    mrp DECIMAL(10,2) NOT NULL,
+    gst_percent DECIMAL(5,2) DEFAULT 18.0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_store_items_serial ON store_items(serial_no);
+CREATE INDEX IF NOT EXISTS idx_store_items_normalized ON store_items(normalized_item_name);
+CREATE INDEX IF NOT EXISTS idx_store_items_active ON store_items(is_active);
+
+-- ============================================================================
+-- INVOICES TABLE (Invoice records - DB-only)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS invoices (
+    invoice_id VARCHAR(50) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    invoice_date DATE NOT NULL,
+    total_amount DECIMAL(10,2) NOT NULL,
+    gst_amount DECIMAL(10,2),
+    final_amount DECIMAL(10,2),
+    status VARCHAR(50) DEFAULT 'draft',
+    payment_status VARCHAR(50) DEFAULT 'unpaid',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
+
+-- ============================================================================
+-- INVOICE ITEMS TABLE (Line items in invoices - DB-only)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS invoice_items (
+    item_id SERIAL PRIMARY KEY,
+    invoice_id VARCHAR(50) NOT NULL,
+    store_item_id INT,
+    item_name VARCHAR(255) NOT NULL,
+    quantity INT NOT NULL,
+    rate DECIMAL(10,2) NOT NULL,
+    discount DECIMAL(10,2) DEFAULT 0,
+    gst_percent DECIMAL(5,2) DEFAULT 18.0,
+    line_amount DECIMAL(10,2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (invoice_id) REFERENCES invoices(invoice_id) ON DELETE CASCADE,
+    FOREIGN KEY (store_item_id) REFERENCES store_items(item_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_items_store_item ON invoice_items(store_item_id);
+
+-- ============================================================================
+-- UPDATE USERS TABLE - Add missing columns for proper user management
+-- ============================================================================
+-- Note: These columns may already exist, adding IF NOT EXISTS equivalent via comments
+-- If columns don't exist, manually add:
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(100);
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(100);
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100);
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS normalized_name VARCHAR(255);
+-- ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE;
+
+-- Ensure index on normalized_name for user searches
+CREATE INDEX IF NOT EXISTS idx_users_normalized_name ON users(normalized_name);

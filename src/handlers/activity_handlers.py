@@ -8,6 +8,7 @@ from src.database.attendance_operations import (
     create_attendance_request, get_user_attendance_today
 )
 from src.utils.guards import check_approval
+from src.utils.access_gate import check_app_feature_access
 from src.utils.cutoff_enforcement import enforce_cutoff_check
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,10 @@ WEIGHT_VALUE, WATER_CUPS, MEAL_PHOTO, HABITS_CONFIRM, CHECKIN_METHOD, CHECKIN_PH
 
 async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start weight logging or handle edit_weight callback"""
+    # Check access gate first
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
+    
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END
@@ -208,6 +213,10 @@ async def get_weight_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start water intake logging"""
+    # Check access gate first
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
+
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END
@@ -291,6 +300,10 @@ async def get_water(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_meal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start meal photo logging"""
+    # Check access gate first
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
+
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END
@@ -369,6 +382,10 @@ async def get_meal_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start habit completion logging with interactive buttons"""
+    # Check access gate first
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
+
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END
@@ -490,6 +507,10 @@ async def get_habits_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return HABITS_CONFIRM
 async def cmd_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start check-in process"""
+    # Check access gate first
+    if not await check_app_feature_access(update, context):
+        return ConversationHandler.END
+
     # Check if approved first
     if not await check_approval(update, context):
         return ConversationHandler.END

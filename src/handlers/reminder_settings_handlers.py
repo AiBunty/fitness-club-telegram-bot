@@ -9,10 +9,19 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src.database.reminder_operations import (
-    get_reminder_preferences, toggle_water_reminder, set_water_reminder_interval,
-    toggle_weight_reminder, set_weight_reminder_time, 
-    toggle_habits_reminder, set_habits_reminder_time
+    get_reminder_profile as get_reminder_preferences,
+    toggle_water_reminder, set_water_reminder_interval,
+    toggle_weight_reminder, set_weight_reminder_time,
+    toggle_meal_reminder, set_meal_reminder_time,
 )
+
+# Backward-compatible aliases (map habits UI to dinner reminder for now)
+def toggle_habits_reminder(user_id: int, enabled: bool) -> bool:
+    return toggle_meal_reminder(user_id, "dinner", enabled)
+
+
+def set_habits_reminder_time(user_id: int, time_str: str) -> bool:
+    return set_meal_reminder_time(user_id, "dinner", time_str)
 
 logger = logging.getLogger(__name__)
 

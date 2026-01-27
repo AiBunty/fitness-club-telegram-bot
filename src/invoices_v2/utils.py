@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 
 USERS_FILE = None
 GST_CONFIG_FILE = "data/gst_config.json"
-from src.utils.user_registry import load_registry, search_registry
+# user_registry removed - database is single source of truth
 
 
 def ensure_gst_config():
@@ -35,10 +35,11 @@ def get_gst_config() -> Dict:
 
 
 def load_users() -> List[Dict]:
-    """Load user registry"""
-    # Delegate to central user_registry for consistency
+    """Load user registry - DATABASE ONLY"""
+    # Database is single source of truth
     try:
-        return load_registry()
+        from src.database.user_operations import get_all_users
+        return get_all_users() or []
     except Exception:
         return []
 
@@ -48,9 +49,91 @@ def search_users(query: str, limit: int = 10) -> List[Dict]:
     Search users by name, username, or telegram_id
     - Partial, case-insensitive match on name/username
     - Exact numeric match on telegram_id
+    
+    Searches the DATABASE first (primary source of truth)
     """
-    # Delegate search to user_registry to ensure single source of truth
-    return search_registry(query, limit=limit)
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[INVOICE] user_search term='{query}'")
+    
+    # Try database first (primary source)
+    try:
+        from src.database.user_operations import get_all_users
+        all_users = get_all_users()
+        
+        if all_users:
+            logger.info(f"[INVOICE_SEARCH] Found {len(all_users)} users from database")
+            # Convert DB format to search format for compatibility
+            formatted_users = []
+            for u in all_users:
+                # Parse full_name into first/last for compatibility
+                full_name = u.get('full_name', '')
+                name_parts = full_name.split(' ', 1)
+                formatted_users.append({
+                    'telegram_id': u.get('user_id'),
+                    'user_id': u.get('user_id'),
+                    'first_name': name_parts[0] if name_parts else '',
+                    'last_name': name_parts[1] if len(name_parts) > 1 else '',
+                    'full_name': full_name,
+                    'username': u.get('telegram_username', ''),
+                    'phone': u.get('phone', ''),
+                    'role': u.get('role', 'member'),
+                    'fee_status': u.get('fee_status', 'unpaid')
+                })
+            return _filter_users(formatted_users, query, limit)
+    except Exception as e:
+        logger.error(f"[INVOICE_SEARCH] Database search failed: {e}")
+        return []
+
+    # No fallback - database is single source of truth
+    return []
+
+
+def _filter_users(users: List[Dict], query: str, limit: int) -> List[Dict]:
+    """Filter users by query term"""
+    if not query or not users:
+        return []
+    
+    query_lower = query.lower().lstrip('@')
+    results = []
+    
+    for user in users:
+        # Exact match on telegram_id (numeric search)
+        if str(user.get('telegram_id', '')).startswith(query):
+            results.append(user)
+            continue
+        
+        # Match on full_name (handles "S J" type names)
+        full_name = str(user.get('full_name', '')).lower()
+        if query_lower in full_name:
+            results.append(user)
+            continue
+        
+        # Partial match on first_name
+        first_name = str(user.get('first_name', '')).lower()
+        if query_lower in first_name:
+            results.append(user)
+            continue
+        
+        # Partial match on last_name
+        last_name = str(user.get('last_name', '')).lower()
+        if query_lower in last_name:
+            results.append(user)
+            continue
+        
+        # Partial match on phone
+        phone = str(user.get('phone', '')).replace(' ', '')
+        if query in phone:
+            results.append(user)
+            continue
+        
+        # Partial match on username
+        username = str(user.get('username', '')).lower().lstrip('@')
+        if query_lower in username:
+            results.append(user)
+            continue
+    
+    return results[:limit]
 
 
 def format_user_display(user: Dict) -> str:

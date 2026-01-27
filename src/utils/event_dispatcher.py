@@ -7,6 +7,9 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from src.utils import message_templates, event_registry
 from src.utils import followup_manager
 from src.database.connection import execute_query
+from src.config import SUPER_ADMIN_USER_ID, USE_LOCAL_DB
+from src.utils.role_notifications import get_moderator_chat_ids
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,43 @@ def schedule_followups(application, chat_id, event_key, context_vars=None):
             # send the templated event
             try:
                 await send_event(ctx.application.bot, chat, tpl_key, ctx_vars)
+                logger.info(f"[FOLLOWUP] sent template={tpl_key} to user={chat}")
+
+                # ALSO: send admin copies for visibility (must include user/name/id/context/amount)
+                try:
+                    admin_msg = (
+                        f"🔔 Follow-up sent to {ctx_vars.get('name','Unknown')} ({chat})\n"
+                        f"Reason: {tpl_key}\n"
+                    )
+                    amount = ctx_vars.get('amount')
+                    if amount is not None:
+                        admin_msg += f"Amount Due: ₹{amount}\n"
+
+                    # Always notify SUPER_ADMIN_USER_ID if configured
+                    if SUPER_ADMIN_USER_ID:
+                        try:
+                            await ctx.application.bot.send_message(chat_id=int(SUPER_ADMIN_USER_ID), text=admin_msg)
+                            logger.info(f"[FOLLOWUP][ADMIN] sent to super_admin={SUPER_ADMIN_USER_ID} for user={chat}")
+                        except Exception as aerr:
+                            logger.debug(f"Could not send followup admin copy to SUPER_ADMIN_USER_ID: {aerr}")
+
+                    # Notify other admins only when NOT in local-only mode to avoid DB access
+                    if not USE_LOCAL_DB:
+                        try:
+                            # get_admin_chat_ids may query DB; call only when remote DB allowed
+                            admin_chats = get_admin_chat_ids()
+                            for ac in admin_chats:
+                                if ac and int(ac) != int(SUPER_ADMIN_USER_ID or 0):
+                                    try:
+                                        await ctx.application.bot.send_message(chat_id=int(ac), text=admin_msg)
+                                    except Exception:
+                                        pass
+                            logger.info(f"[FOLLOWUP][ADMIN] sent copies to admins for user={chat}")
+                        except Exception as aderr:
+                            logger.debug(f"Could not fetch/send admin list copies: {aderr}")
+                except Exception as adm_exc:
+                    logger.debug(f"Failed to send admin followup copy: {adm_exc}")
+
             except Exception as e:
                 logger.error(f"Error running followup job {job_name}: {e}")
 

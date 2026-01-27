@@ -6,6 +6,7 @@ from io import BytesIO
 from src.utils.gst import load_gst_config, save_gst_config, is_gst_enabled, get_gst_mode, get_gst_percent
 from src.utils.store_items import add_or_update_item, load_store_items, find_items
 from src.utils.state_management import clear_stale_states
+from src.utils.auth import is_admin_id
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +14,17 @@ logger = logging.getLogger(__name__)
 GST_TOGGLE, GST_MODE, GST_PERCENT = range(3)
 
 # Store item conversation states
-ITEM_NAME, ITEM_HSN, ITEM_MRP, ITEM_GST, BULK_UPLOAD_AWAIT = range(3, 8)
+ITEM_NAME, ITEM_HSN, ITEM_MRP, ITEM_GST, BULK_UPLOAD_AWAIT, DELETE_SERIAL_OR_NAME, EDIT_SERIAL_OR_NAME, EDIT_FIELD, EDIT_VALUE = range(3, 12)
 
 
 async def cmd_gst_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Admin-only: verify role
+    if not is_admin_id(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        else:
+            await update.message.reply_text("❌ Admin access only.")
+        return ConversationHandler.END
     query = update.callback_query
     if query:
         await query.answer()
@@ -43,6 +51,9 @@ async def cmd_gst_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def gst_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_id(update.effective_user.id):
+        await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     cfg = load_gst_config()
@@ -56,6 +67,9 @@ async def gst_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def gst_change_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_id(update.effective_user.id):
+        await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     cfg = load_gst_config()
@@ -66,6 +80,9 @@ async def gst_change_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def gst_edit_percent_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_id(update.effective_user.id):
+        await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter GST percentage (0-100):")
@@ -73,6 +90,9 @@ async def gst_edit_percent_prompt(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def gst_edit_percent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_id(update.effective_user.id):
+        await update.message.reply_text("❌ Admin access only.")
+        return ConversationHandler.END
     text = update.message.text.strip()
     try:
         p = float(text)
@@ -91,6 +111,13 @@ async def gst_edit_percent(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Store item flows
 async def cmd_create_store_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Admin-only: verify role
+    if not is_admin_id(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        else:
+            await update.message.reply_text("❌ Admin access only.")
+        return ConversationHandler.END
     query = update.callback_query
     if query:
         await query.answer()
@@ -104,6 +131,8 @@ async def cmd_create_store_items(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("📥 Bulk Upload (Excel)", callback_data="store_bulk_upload")],
         [InlineKeyboardButton("📄 Download Sample Excel", callback_data="store_download_sample")],
         [InlineKeyboardButton("📄 Download Existing Items", callback_data="store_download_existing")],
+        [InlineKeyboardButton("🗑 Delete Item", callback_data="store_delete_item")],
+        [InlineKeyboardButton("✏️ Edit Item Price/GST", callback_data="store_edit_item")],
         [InlineKeyboardButton("⬅ Back", callback_data="admin_dashboard")],
     ])
     await message.reply_text("🏬 Store Items Master\n\nChoose action:", reply_markup=kb)
@@ -470,6 +499,255 @@ async def handle_bulk_upload_text(update: Update, context: ContextTypes.DEFAULT_
     return BULK_UPLOAD_AWAIT
 
 
+# ==================== DELETE ITEM FLOW ====================
+async def store_delete_item_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt admin to enter serial or name to delete"""
+    query = update.callback_query
+    await query.answer()
+    clear_stale_states(update, context, flow_name="store_admin")
+    await query.edit_message_text(
+        "🗑 Delete Item\n\n"
+        "Enter Serial Number or Item Name to search:"
+    )
+    return DELETE_SERIAL_OR_NAME
+
+
+async def handle_delete_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search for item to delete"""
+    search_term = update.message.text.strip()
+    
+    # Try serial first
+    try:
+        serial = int(search_term)
+        from src.database.store_items_operations import get_item_by_serial_from_db
+        item = get_item_by_serial_from_db(serial)
+        if item:
+            context.user_data['delete_item'] = item
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"confirm_delete_{item['serial']}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cmd_create_store_items")]
+            ])
+            await update.message.reply_text(
+                f"Found item:\n\n"
+                f"Serial: {item['serial']}\n"
+                f"Name: {item['name']}\n"
+                f"HSN: {item['hsn']}\n"
+                f"MRP: Rs {item['mrp']}\n"
+                f"GST: {item['gst']}%\n\n"
+                f"⚠️ Confirm deletion?",
+                reply_markup=kb
+            )
+            return ConversationHandler.END
+    except ValueError:
+        pass
+    
+    # Search by name
+    from src.database.store_items_operations import search_items_by_name_from_db
+    items = search_items_by_name_from_db(search_term)
+    
+    if not items:
+        await update.message.reply_text("❌ No items found. Try again or /cancel to exit.")
+        return DELETE_SERIAL_OR_NAME
+    
+    if len(items) == 1:
+        item = items[0]
+        context.user_data['delete_item'] = item
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"confirm_delete_{item['serial']}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cmd_create_store_items")]
+        ])
+        await update.message.reply_text(
+            f"Found item:\n\n"
+            f"Serial: {item['serial']}\n"
+            f"Name: {item['name']}\n"
+            f"HSN: {item['hsn']}\n"
+            f"MRP: Rs {item['mrp']}\n"
+            f"GST: {item['gst']}%\n\n"
+            f"⚠️ Confirm deletion?",
+            reply_markup=kb
+        )
+        return ConversationHandler.END
+    
+    # Multiple matches
+    text = f"Found {len(items)} items:\n\n"
+    for item in items[:10]:
+        text += f"Serial {item['serial']}: {item['name']} (Rs {item['mrp']})\n"
+    text += "\nEnter Serial Number to delete:"
+    await update.message.reply_text(text)
+    return DELETE_SERIAL_OR_NAME
+
+
+async def confirm_delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and delete the item"""
+    query = update.callback_query
+    await query.answer()
+    
+    serial = int(query.data.split("_")[-1])
+    
+    try:
+        from src.database.store_items_operations import delete_item_from_db
+        success = delete_item_from_db(serial)
+        if success:
+            await query.edit_message_text(f"✅ Item #{serial} deleted successfully!")
+        else:
+            await query.edit_message_text(f"❌ Failed to delete item #{serial}")
+    except Exception as e:
+        logger.error(f"Error deleting item: {e}")
+        await query.edit_message_text(f"❌ Error deleting item: {e}")
+    
+    return ConversationHandler.END
+
+
+# ==================== EDIT ITEM FLOW ====================
+async def store_edit_item_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt admin to enter serial or name to edit"""
+    query = update.callback_query
+    await query.answer()
+    clear_stale_states(update, context, flow_name="store_admin")
+    await query.edit_message_text(
+        "✏️ Edit Item Price/GST\n\n"
+        "Enter Serial Number or Item Name to search:"
+    )
+    return EDIT_SERIAL_OR_NAME
+
+
+async def handle_edit_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search for item to edit"""
+    search_term = update.message.text.strip()
+    
+    # Try serial first
+    try:
+        serial = int(search_term)
+        from src.database.store_items_operations import get_item_by_serial_from_db
+        item = get_item_by_serial_from_db(serial)
+        if item:
+            context.user_data['edit_item'] = item
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💰 Edit MRP", callback_data="edit_field_mrp")],
+                [InlineKeyboardButton("📊 Edit GST", callback_data="edit_field_gst")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cmd_create_store_items")]
+            ])
+            await update.message.reply_text(
+                f"Current details:\n\n"
+                f"Serial: {item['serial']}\n"
+                f"Name: {item['name']}\n"
+                f"HSN: {item['hsn']}\n"
+                f"MRP: Rs {item['mrp']}\n"
+                f"GST: {item['gst']}%\n\n"
+                f"What would you like to edit?",
+                reply_markup=kb
+            )
+            return ConversationHandler.END
+    except ValueError:
+        pass
+    
+    # Search by name
+    from src.database.store_items_operations import search_items_by_name_from_db
+    items = search_items_by_name_from_db(search_term)
+    
+    if not items:
+        await update.message.reply_text("❌ No items found. Try again or /cancel to exit.")
+        return EDIT_SERIAL_OR_NAME
+    
+    if len(items) == 1:
+        item = items[0]
+        context.user_data['edit_item'] = item
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Edit MRP", callback_data="edit_field_mrp")],
+            [InlineKeyboardButton("📊 Edit GST", callback_data="edit_field_gst")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cmd_create_store_items")]
+        ])
+        await update.message.reply_text(
+            f"Current details:\n\n"
+            f"Serial: {item['serial']}\n"
+            f"Name: {item['name']}\n"
+            f"HSN: {item['hsn']}\n"
+            f"MRP: Rs {item['mrp']}\n"
+            f"GST: {item['gst']}%\n\n"
+            f"What would you like to edit?",
+            reply_markup=kb
+        )
+        return ConversationHandler.END
+    
+    # Multiple matches
+    text = f"Found {len(items)} items:\n\n"
+    for item in items[:10]:
+        text += f"Serial {item['serial']}: {item['name']} (Rs {item['mrp']})\n"
+    text += "\nEnter Serial Number to edit:"
+    await update.message.reply_text(text)
+    return EDIT_SERIAL_OR_NAME
+
+
+async def prompt_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt for new value"""
+    query = update.callback_query
+    await query.answer()
+    
+    field = query.data.split("_")[-1]  # mrp or gst
+    context.user_data['edit_field'] = field
+    
+    item = context.user_data.get('edit_item', {})
+    current_value = item.get(field, 0)
+    
+    if field == 'mrp':
+        await query.edit_message_text(f"Current MRP: Rs {current_value}\n\nEnter new MRP:")
+    else:
+        await query.edit_message_text(f"Current GST: {current_value}%\n\nEnter new GST percentage:")
+    
+    return EDIT_VALUE
+
+
+async def handle_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save edited value"""
+    try:
+        new_value = float(update.message.text.strip())
+        field = context.user_data.get('edit_field')
+        item = context.user_data.get('edit_item')
+        
+        if not item or not field:
+            await update.message.reply_text("❌ Session expired. Please start again.")
+            return ConversationHandler.END
+        
+        # Validate
+        if field == 'mrp' and new_value <= 0:
+            await update.message.reply_text("❌ MRP must be greater than 0. Try again:")
+            return EDIT_VALUE
+        if field == 'gst' and (new_value < 0 or new_value > 100):
+            await update.message.reply_text("❌ GST must be between 0 and 100. Try again:")
+            return EDIT_VALUE
+        
+        # Update in database
+        from src.database.store_items_operations import add_or_update_item_in_db
+        item[field] = new_value
+        result = add_or_update_item_in_db({
+            'serial': item['serial'],
+            'name': item['name'],
+            'hsn': item['hsn'],
+            'mrp': item['mrp'],
+            'gst': item['gst']
+        })
+        
+        if result:
+            await update.message.reply_text(
+                f"✅ Updated successfully!\n\n"
+                f"Serial: {result['serial']}\n"
+                f"Name: {result['name']}\n"
+                f"MRP: Rs {result['mrp']}\n"
+                f"GST: {result['gst']}%"
+            )
+        else:
+            await update.message.reply_text("❌ Failed to update item")
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid number. Try again:")
+        return EDIT_VALUE
+    except Exception as e:
+        logger.error(f"Error updating item: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
+    
+    return ConversationHandler.END
+
+
 def get_store_and_gst_handlers():
     from telegram.ext import CallbackQueryHandler
     gst_conv = ConversationHandler(
@@ -491,6 +769,8 @@ def get_store_and_gst_handlers():
             CallbackQueryHandler(store_bulk_upload_prompt, pattern='^store_bulk_upload$'),
             CallbackQueryHandler(store_bulk_upload_prompt, pattern='^store_download_sample$'),
             CallbackQueryHandler(store_download_existing, pattern='^store_download_existing$'),
+            CallbackQueryHandler(store_delete_item_prompt, pattern='^store_delete_item$'),
+            CallbackQueryHandler(store_edit_item_prompt, pattern='^store_edit_item$'),
         ],
         states={
             ITEM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, store_item_name)],
@@ -500,7 +780,10 @@ def get_store_and_gst_handlers():
             BULK_UPLOAD_AWAIT: [
                 MessageHandler(filters.Document.ALL, handle_uploaded_store_excel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bulk_upload_text)
-            ]
+            ],
+            DELETE_SERIAL_OR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_search)],
+            EDIT_SERIAL_OR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_search)],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_value)],
         },
         fallbacks=[],
         conversation_timeout=300,  # 5 minutes timeout to prevent stuck states
