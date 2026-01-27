@@ -1,0 +1,26 @@
+[
+  {
+    "id": "notif_1769061617.273318",
+    "user_id": 424837855,
+    "title": "Invoice Generated",
+    "message": "Invoice 2B9A92EE for Rs 1044 has been created",
+    "notification_type": "invoice_generated",
+    "related_entity_type": "invoice",
+    "related_entity_id": "2B9A92EE",
+    "is_read": false,
+    "created_at": "2026-01-22T11:30:17.273318",
+    "read_at": null
+  },
+  {
+    "id": "notif_1769061617.281742",
+    "user_id": 424837855,
+    "title": "Payment Due",
+    "message": "Please pay invoice 2B9A92EE. Amount: Rs 1044",
+    "notification_type": "payment_due",
+    "related_entity_type": "invoice",
+    "related_entity_id": "2B9A92EE",
+    "is_read": false,
+    "created_at": "2026-01-22T11:30:17.281742",
+    "read_at": null
+  }
+]

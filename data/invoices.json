@@ -1,1 +1,22 @@
-{}
+{
+  "INV-0001": {
+    "invoice_id": "INV-0001",
+    "user_id": 1206519616,
+    "items": [
+      {
+        "name": "1206519616",
+        "rate": 1206519616.0,
+        "qty": 1,
+        "disc": 5.0,
+        "line_total": 1146193635.2
+      }
+    ],
+    "subtotal": 1146193635.2,
+    "gst": 206314854.34,
+    "shipping": 10.0,
+    "total": 1352508499.54,
+    "status": "pending",
+    "created_at": "2026-01-22T07:57:09.557723",
+    "paid_at": null
+  }
+}
