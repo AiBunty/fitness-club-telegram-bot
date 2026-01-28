@@ -356,18 +356,19 @@ def update_participant_daily_progress(user_id: int, challenge_id: int,
         import json
         db = DatabaseConnection()
         
+        # MySQL: Use JSON_SET instead of PostgreSQL jsonb_set
         query = """
             UPDATE challenge_participants 
-            SET daily_progress = jsonb_set(
-                COALESCE(daily_progress, '{}'::jsonb),
-                %s::text[],
-                %s::jsonb
+            SET daily_progress = JSON_SET(
+                COALESCE(daily_progress, JSON_OBJECT()),
+                CONCAT('$.', %s),
+                CAST(%s AS JSON)
             )
             WHERE challenge_id = %s AND user_id = %s
         """
         
         db.execute_update(query, (
-            [date_key],
+            date_key,
             json.dumps(daily_data),
             challenge_id,
             user_id
