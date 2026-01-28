@@ -193,9 +193,11 @@ def consume_credit_with_date(user_id: int, consumption_date: date, reason: str =
             )
 
             cur.execute(
-                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s RETURNING used_credits, available_credits",
+                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s",
                 (user_id,)
             )
+            # Fetch updated values
+            cur.execute("SELECT used_credits, available_credits FROM shake_credits WHERE user_id = %s", (user_id,))
             updated = cur.fetchone()
             logger.info(f"Admin deducted 1 credit from user {user_id} for date {consumption_date}")
             return True

@@ -464,17 +464,20 @@ def move_expired_to_inactive() -> int:
         
         grace_period_date = datetime.now().date() - timedelta(days=7)
         
-        # FIX: Removed non-existent telegram_id column
-        query = """
+        # FIX: Removed non-existent telegram_id column and RETURNING clause
+        query1 = """
             UPDATE users
             SET fee_status = 'expired'
             WHERE fee_status IN ('paid', 'active')
               AND fee_expiry_date IS NOT NULL
               AND fee_expiry_date < %s
-            RETURNING user_id, full_name, fee_expiry_date
         """
         
-        cur.execute(query, (grace_period_date,))
+        cur.execute(query1, (grace_period_date,))
+        
+        # Get the updated users
+        query2 = "SELECT user_id, full_name, fee_expiry_date FROM users WHERE fee_status = 'expired' AND fee_expiry_date < %s"
+        cur.execute(query2, (grace_period_date,))
         moved = cur.fetchall()
         conn.commit()
         

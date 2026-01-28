@@ -89,13 +89,17 @@ def add_motivational_message(message_text: str, category: str = 'checkin') -> di
     """
     try:
         db = DatabaseConnection()
-        query = """
+        query1 = """
             INSERT INTO motivational_messages (message_text, category)
             VALUES (%s, %s)
-            RETURNING id
         """
         
-        message_id = db.execute_insert(query, (message_text, category))
+        db.execute_insert(query1, (message_text, category))
+        
+        # Get the created message ID
+        query2 = "SELECT id FROM motivational_messages WHERE message_text = %s AND category = %s ORDER BY id DESC LIMIT 1"
+        result = db.execute_query(query2, (message_text, category), fetch_one=True)
+        message_id = result['id'] if result else None
         
         if message_id:
             return {

@@ -67,13 +67,16 @@ def add_or_update_item_in_db(item: Dict) -> Dict:
             existing = get_item_by_serial_from_db(serial)
             if existing:
                 # Update existing item
-                query = """
+                query1 = """
                 UPDATE store_items
                 SET name = %s, hsn = %s, mrp = %s, gst = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE serial = %s
-                RETURNING *
                 """
-                result = execute_query(query, (name_raw, hsn_raw, mrp, gst, serial), fetch_one=True)
+                execute_query(query1, (name_raw, hsn_raw, mrp, gst, serial))
+                
+                # Get the updated result
+                query2 = "SELECT * FROM store_items WHERE serial = %s"
+                result = execute_query(query2, (serial,), fetch_one=True)
                 if result:
                     result['is_new'] = False
                     return result
@@ -85,24 +88,30 @@ def add_or_update_item_in_db(item: Dict) -> Dict:
         dup = find_by_name_hsn_from_db(name_raw, hsn_raw)
         if dup:
             # Update price/GST of existing item
-            query = """
+            query1 = """
             UPDATE store_items
             SET mrp = %s, gst = %s, updated_at = CURRENT_TIMESTAMP
             WHERE serial = %s
-            RETURNING *
             """
-            result = execute_query(query, (mrp, gst, dup['serial']), fetch_one=True)
+            execute_query(query1, (mrp, gst, dup['serial']))
+            
+            # Get the updated result
+            query2 = "SELECT * FROM store_items WHERE serial = %s"
+            result = execute_query(query2, (dup['serial'],), fetch_one=True)
             if result:
                 result['is_new'] = False
                 return result
         
         # Create new item
-        query = """
+        query1 = """
         INSERT INTO store_items (name, hsn, mrp, gst)
         VALUES (%s, %s, %s, %s)
-        RETURNING *
         """
-        result = execute_query(query, (name_raw, hsn_raw, mrp, gst), fetch_one=True)
+        execute_query(query1, (name_raw, hsn_raw, mrp, gst))
+        
+        # Get the created item
+        query2 = "SELECT * FROM store_items WHERE name = %s AND hsn = %s ORDER BY serial DESC LIMIT 1"
+        result = execute_query(query2, (name_raw, hsn_raw), fetch_one=True)
         if result:
             result['is_new'] = True
             return result
