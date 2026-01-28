@@ -139,8 +139,8 @@ def delete_user(user_id: int):
     deleted_counts = {}
     for table in tables_to_clean:
         try:
-            # CRITICAL: Use BIGINT casting for 64-bit Telegram IDs
-            result = execute_query(f"DELETE FROM {table} WHERE user_id = %s::BIGINT", (user_id,))
+            # MySQL: Remove ::BIGINT casting - MySQL handles auto-conversion
+            result = execute_query(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
             deleted_counts[table] = result if isinstance(result, int) else 0
             logger.debug(f"[DELETE_USER] Deleted {deleted_counts[table]} records from {table} for user {user_id}")
         except Exception as e:
@@ -155,12 +155,12 @@ def delete_user(user_id: int):
             return None
 
         with conn.cursor() as cursor:
-            # CRITICAL: Use BIGINT casting to ensure proper type matching
-            cursor.execute("DELETE FROM users WHERE user_id = %s::BIGINT RETURNING full_name", (user_id,))
+            # MySQL: Remove ::BIGINT casting and RETURNING clause
+            cursor.execute("SELECT full_name FROM users WHERE user_id = %s", (user_id,))
             result = cursor.fetchone()
-            conn.commit()
-            
             if result:
+                cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+                conn.commit()
                 logger.info(f"[DELETE_USER] User deleted: {user_id} - {result[0]} (cleaned {sum(deleted_counts.values())} related records)")
                 return {'full_name': result[0]}
             else:
@@ -196,11 +196,14 @@ def ban_user(user_id: int, reason: str = None):
             return None
 
         with conn.cursor() as cursor:
+            # MySQL: Remove ::BIGINT casting and RETURNING clause
             cursor.execute(
                 "UPDATE users SET is_banned = TRUE, ban_reason = %s, banned_at = CURRENT_TIMESTAMP "
-                "WHERE user_id = %s::BIGINT RETURNING full_name",
+                "WHERE user_id = %s",
                 (reason, user_id)
             )
+            # Fetch updated record
+            cursor.execute("SELECT full_name FROM users WHERE user_id = %s", (user_id,))
             result = cursor.fetchone()
             conn.commit()
             
@@ -235,11 +238,14 @@ def unban_user(user_id: int):
             return None
 
         with conn.cursor() as cursor:
+            # MySQL: Remove ::BIGINT casting and RETURNING clause
             cursor.execute(
                 "UPDATE users SET is_banned = FALSE, ban_reason = NULL, banned_at = NULL "
-                "WHERE user_id = %s::BIGINT RETURNING full_name",
+                "WHERE user_id = %s",
                 (user_id,)
             )
+            # Fetch updated record
+            cursor.execute("SELECT full_name FROM users WHERE user_id = %s", (user_id,))
             result = cursor.fetchone()
             conn.commit()
             
@@ -287,26 +293,32 @@ def is_user_approved(user_id: int) -> bool:
 
 def approve_user(user_id: int, approved_by: int):
     """Approve a user's registration"""
-    query = """
-        UPDATE users 
-        SET approval_status = 'approved'
-        WHERE user_id = %s 
-        RETURNING full_name, telegram_username
-    """
-    result = execute_query(query, (user_id,), fetch_one=True)
+    # MySQL: Remove RETURNING clause, use separate SELECT
+    execute_query(
+        "UPDATE users SET approval_status = 'approved' WHERE user_id = %s",
+        (user_id,)
+    )
+    result = execute_query(
+        "SELECT full_name, telegram_username FROM users WHERE user_id = %s",
+        (user_id,),
+        fetch_one=True
+    )
     if result:
         logger.info(f"User approved: {user_id} - {result['full_name']} (by admin {approved_by})")
     return result
 
 def reject_user(user_id: int, rejected_by: int, reason: str = None):
     """Reject a user's registration"""
-    query = """
-        UPDATE users 
-        SET approval_status = 'rejected'
-        WHERE user_id = %s 
-        RETURNING full_name, telegram_username
-    """
-    result = execute_query(query, (user_id,), fetch_one=True)
+    # MySQL: Remove RETURNING clause, use separate SELECT
+    execute_query(
+        "UPDATE users SET approval_status = 'rejected' WHERE user_id = %s",
+        (user_id,)
+    )
+    result = execute_query(
+        "SELECT full_name, telegram_username FROM users WHERE user_id = %s",
+        (user_id,),
+        fetch_one=True
+    )
     if result:
         logger.info(f"User rejected: {user_id} - {result['full_name']} (by admin {rejected_by})")
     return result

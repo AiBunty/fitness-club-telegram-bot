@@ -17,13 +17,18 @@ from src.database.ar_operations import (
 def create_pending_payment(user_id: int, request_id: int, amount: float, payment_method: str, reference: str = None, screenshot_file_id: str = None) -> dict:
     """Create a pending payment record (evidence) without mirroring to AR ledger."""
     try:
-        result = execute_query(
+        # MySQL: Remove RETURNING clause, use separate SELECT with LAST_INSERT_ID()
+        execute_query(
             """
             INSERT INTO subscription_payments (user_id, request_id, amount, payment_method, reference, screenshot_file_id, status, paid_at)
             VALUES (%s, %s, %s, %s, %s, %s, 'pending', NULL)
-            RETURNING id, user_id, amount, payment_method, status
             """,
             (user_id, request_id, amount, payment_method, reference, screenshot_file_id),
+            fetch_one=False,
+        )
+        # Fetch inserted record using LAST_INSERT_ID()
+        result = execute_query(
+            "SELECT id, user_id, amount, payment_method, status FROM subscription_payments WHERE id = LAST_INSERT_ID()",
             fetch_one=True,
         )
         if result:
@@ -52,14 +57,20 @@ def finalize_pending_payment(payment_id: int, reference: str = None, screenshot_
     """Mark a pending payment as completed and mirror into AR ledger."""
     try:
         # Update the pending payment to completed and set paid_at
-        updated = execute_query(
+        # MySQL: Remove RETURNING, use separate SELECT after UPDATE
+        execute_query(
             """
             UPDATE subscription_payments
             SET status = 'completed', reference = COALESCE(%s, reference), screenshot_file_id = COALESCE(%s, screenshot_file_id), paid_at = NOW()
             WHERE id = %s
-            RETURNING id, user_id, request_id, amount, payment_method
             """,
             (reference, screenshot_file_id, payment_id),
+            fetch_one=False,
+        )
+        # Fetch updated record
+        updated = execute_query(
+            "SELECT id, user_id, request_id, amount, payment_method FROM subscription_payments WHERE id = %s",
+            (payment_id,),
             fetch_one=True,
         )
 
@@ -116,13 +127,18 @@ def create_subscription_request(user_id: int, plan_id: str, amount: int, payment
         
         requested_date = datetime.now()
         
-        result = execute_query(
+        # MySQL: Remove RETURNING, use separate SELECT with LAST_INSERT_ID()
+        execute_query(
             """
             INSERT INTO subscription_requests (user_id, plan_id, amount, payment_method, status, requested_at)
             VALUES (%s, %s, %s, %s, 'pending', %s)
-            RETURNING id, user_id, plan_id, amount, payment_method, status, requested_at
             """,
             (user_id, plan_id, amount, payment_method, requested_date),
+            fetch_one=False,
+        )
+        # Fetch inserted record
+        result = execute_query(
+            "SELECT id, user_id, plan_id, amount, payment_method, status, requested_at FROM subscription_requests WHERE id = LAST_INSERT_ID()",
             fetch_one=True,
         )
         
@@ -578,13 +594,18 @@ def record_payment(user_id: int, request_id: int, amount: float, payment_method:
             logger.error(f"Subscription request not found for payment: {request_id}")
             return None
 
-        result = execute_query(
+        # MySQL: Remove RETURNING, use separate SELECT with LAST_INSERT_ID()
+        execute_query(
             """
             INSERT INTO subscription_payments (user_id, request_id, amount, payment_method, reference, screenshot_file_id, status, paid_at)
             VALUES (%s, %s, %s, %s, %s, %s, 'completed', NOW())
-            RETURNING id, user_id, amount, payment_method, paid_at
             """,
             (user_id, request_id, amount, payment_method, reference, screenshot_file_id),
+            fetch_one=False,
+        )
+        # Fetch inserted record
+        result = execute_query(
+            "SELECT id, user_id, amount, payment_method, paid_at FROM subscription_payments WHERE id = LAST_INSERT_ID()",
             fetch_one=True,
         )
         

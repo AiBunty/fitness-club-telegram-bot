@@ -19,14 +19,21 @@ def create_attendance_request(user_id: int, source: str = 'manual', details: str
         queue_id if successful, None on error
     """
     try:
+        # MySQL: Remove ON CONFLICT (PostgreSQL), use INSERT IGNORE or ON DUPLICATE KEY UPDATE
+        # Also remove RETURNING clause - use separate SELECT
         query = """
             INSERT INTO attendance_queue (user_id, queue_date, status, approved_by, approved_at)
             VALUES (%s, CURRENT_DATE, 'pending', NULL, NULL)
-            ON CONFLICT (user_id, queue_date) 
-            DO UPDATE SET status = 'pending'
-            RETURNING queue_id
+            ON DUPLICATE KEY UPDATE status = 'pending'
         """
-        result = execute_query(query, (user_id,), fetch_one=True)
+        execute_query(query, (user_id,), fetch_one=False)
+        
+        # Fetch the queue_id for today
+        result = execute_query(
+            "SELECT queue_id FROM attendance_queue WHERE user_id = %s AND queue_date = CURRENT_DATE",
+            (user_id,),
+            fetch_one=True
+        )
         
         if result:
             queue_id = result.get('queue_id')
@@ -75,13 +82,20 @@ def approve_attendance(attendance_id: int, admin_user_id: int):
             return existing
 
         # Update status and get user details only if pending
+        # MySQL: Remove RETURNING, use separate SELECT after UPDATE
         query1 = """
             UPDATE attendance_queue 
             SET status = 'approved', approved_by = %s, approved_at = CURRENT_TIMESTAMP
             WHERE attendance_id = %s AND status = 'pending'
-            RETURNING user_id, (SELECT telegram_id FROM users WHERE user_id = attendance_queue.user_id) as telegram_id
         """
-        result = execute_query(query1, (admin_user_id, attendance_id), fetch_one=True)
+        execute_query(query1, (admin_user_id, attendance_id), fetch_one=False)
+        
+        # Fetch updated record with user details
+        result = execute_query(
+            """SELECT user_id FROM attendance_queue WHERE attendance_id = %s AND status = 'approved'""",
+            (attendance_id,),
+            fetch_one=True
+        )
         
         if result:
             user_id = result['user_id']
@@ -125,9 +139,15 @@ def reject_attendance(attendance_id: int, admin_user_id: int, reason: str = ""):
             UPDATE attendance_queue 
             SET status = 'rejected', approved_by = %s, approved_at = CURRENT_TIMESTAMP
             WHERE attendance_id = %s AND status = 'pending'
-            RETURNING user_id, (SELECT telegram_id FROM users WHERE user_id = attendance_queue.user_id) as telegram_id
         """
-        result = execute_query(query, (admin_user_id, attendance_id), fetch_one=True)
+        execute_query(query, (admin_user_id, attendance_id), fetch_one=False)
+        
+        # Fetch updated record
+        result = execute_query(
+            "SELECT user_id FROM attendance_queue WHERE attendance_id = %s AND status = 'rejected'",
+            (attendance_id,),
+            fetch_one=True
+        )
         if result:
             result['already_processed'] = False
             logger.info(f"Attendance rejected for user {result['user_id']}, reason: {reason}")
