@@ -7,8 +7,8 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from database.user_operations import get_user, delete_user
-from database.connection import test_connection
+from src.database.user_operations import get_user, delete_user
+from src.database.connection import test_connection
 import logging
 
 logging.basicConfig(
@@ -91,7 +91,7 @@ def test_user_lookup():
     print("="*60)
     
     # Get a sample user to test with
-    from database.user_operations import get_all_users
+    from src.database.user_operations import get_all_users
     users = get_all_users()
     
     if not users:

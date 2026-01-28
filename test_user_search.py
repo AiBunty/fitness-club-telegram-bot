@@ -10,8 +10,8 @@ import os
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from database.user_operations import search_users
-from database.connection import test_connection
+from src.database.user_operations import search_users
+from src.database.connection import test_connection
 import logging
 
 logging.basicConfig(
