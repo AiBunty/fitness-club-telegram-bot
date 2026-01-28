@@ -34,24 +34,25 @@ def create_or_update_product(product_code: str, category: str, name: str, descri
         Product dict or None on error
     """
     try:
-        query = """
+        query1 = """
             INSERT INTO store_products 
             (product_code, category, name, description, price, discount_percent, stock, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (product_code)
-            DO UPDATE SET
-                category = EXCLUDED.category,
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                price = EXCLUDED.price,
-                discount_percent = EXCLUDED.discount_percent,
-                stock = EXCLUDED.stock,
-                status = EXCLUDED.status,
+            ON DUPLICATE KEY UPDATE
+                category = VALUES(category),
+                name = VALUES(name),
+                description = VALUES(description),
+                price = VALUES(price),
+                discount_percent = VALUES(discount_percent),
+                stock = VALUES(stock),
+                status = VALUES(status),
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING *
         """
-        result = execute_query(query, (product_code, category, name, description, price, discount_percent, stock, status), 
-                              fetch_one=True)
+        execute_query(query1, (product_code, category, name, description, price, discount_percent, stock, status))
+        
+        # Get the result
+        query2 = "SELECT * FROM store_products WHERE product_code = %s"
+        result = execute_query(query2, (product_code,), fetch_one=True)
         
         if result:
             logger.info(f"Product upserted: {product_code} - {name}")
@@ -199,13 +200,16 @@ def create_order(user_id: int, cart_items: list, payment_method: str, notes: str
             })
         
         # Create order record (status = OPEN)
-        order_query = """
+        order_query1 = """
             INSERT INTO store_orders 
             (user_id, total_amount, payment_method, payment_status, notes, created_at)
             VALUES (%s, %s, %s, 'OPEN', %s, CURRENT_TIMESTAMP)
-            RETURNING order_id, total_amount, created_at
         """
-        order = execute_query(order_query, (user_id, total_amount, payment_method, notes), fetch_one=True)
+        execute_query(order_query1, (user_id, total_amount, payment_method, notes))
+        
+        # Get the created order
+        order_query2 = "SELECT order_id, total_amount, created_at FROM store_orders WHERE user_id = %s ORDER BY order_id DESC LIMIT 1"
+        order = execute_query(order_query2, (user_id,), fetch_one=True)
         
         if not order:
             logger.error(f"Failed to create order for user {user_id}")
@@ -324,13 +328,16 @@ def apply_order_payment(order_id: int, amount: float, payment_method: str,
             new_status = 'PARTIAL'
         
         # Update order
-        update_query = """
+        update_query1 = """
             UPDATE store_orders
             SET balance = %s, payment_status = %s, updated_at = CURRENT_TIMESTAMP
             WHERE order_id = %s
-            RETURNING *
         """
-        updated_order = execute_query(update_query, (balance, new_status, order_id), fetch_one=True)
+        execute_query(update_query1, (balance, new_status, order_id))
+        
+        # Get the updated order
+        update_query2 = "SELECT * FROM store_orders WHERE order_id = %s"
+        updated_order = execute_query(update_query2, (order_id,), fetch_one=True)
         
         # Log payment transaction (for audit trail)
         if updated_order:
@@ -372,14 +379,17 @@ def apply_order_credit(order_id: int, admin_id: int, due_days: int = 7) -> dict:
         due_date = (datetime.now() + timedelta(days=due_days)).date()
 
         # Update order to credit terms
-        update_query = """
+        update_query1 = """
             UPDATE store_orders
             SET payment_method = 'CREDIT', payment_status = 'CREDIT', payment_approved_by = %s,
                 payment_due_date = %s, updated_at = CURRENT_TIMESTAMP
             WHERE order_id = %s
-            RETURNING *
         """
-        updated = execute_query(update_query, (admin_id, due_date, order_id), fetch_one=True)
+        execute_query(update_query1, (admin_id, due_date, order_id))
+        
+        # Get the updated order
+        update_query2 = "SELECT * FROM store_orders WHERE order_id = %s"
+        updated = execute_query(update_query2, (order_id,), fetch_one=True)
 
         if not updated:
             logger.error(f"Failed to mark order {order_id} as credit")
@@ -421,13 +431,16 @@ def close_order(order_id: int, admin_id: int, reason: str = "") -> bool:
         Success status
     """
     try:
-        query = """
+        query1 = """
             UPDATE store_orders
             SET payment_status = 'CLOSED', closed_by = %s, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE order_id = %s AND payment_status = 'PAID'
-            RETURNING order_id
         """
-        result = execute_query(query, (admin_id, order_id), fetch_one=True)
+        execute_query(query1, (admin_id, order_id))
+        
+        # Verify the update succeeded
+        query2 = "SELECT order_id FROM store_orders WHERE order_id = %s AND payment_status = 'CLOSED'"
+        result = execute_query(query2, (order_id,), fetch_one=True)
         
         if result:
             logger.info(f"Order {order_id} closed by admin {admin_id}: {reason}")
@@ -455,13 +468,16 @@ def reduce_stock(product_id: int, quantity: int, order_id: int = None) -> bool:
         Success status
     """
     try:
-        query = """
+        query1 = """
             UPDATE store_products
             SET stock = stock - %s, updated_at = CURRENT_TIMESTAMP
             WHERE product_id = %s AND stock >= %s
-            RETURNING stock
         """
-        result = execute_query(query, (quantity, product_id, quantity), fetch_one=True)
+        execute_query(query1, (quantity, product_id, quantity))
+        
+        # Get the updated stock value
+        query2 = "SELECT stock FROM store_products WHERE product_id = %s"
+        result = execute_query(query2, (product_id,), fetch_one=True)
         
         if result:
             logger.info(f"Stock reduced for product {product_id}: qty={quantity}, remaining={result['stock']}")
@@ -477,13 +493,16 @@ def reduce_stock(product_id: int, quantity: int, order_id: int = None) -> bool:
 def increase_stock(product_id: int, quantity: int, reason: str = "") -> bool:
     """Increase stock (e.g., order cancellation, returned items)"""
     try:
-        query = """
+        query1 = """
             UPDATE store_products
             SET stock = stock + %s, updated_at = CURRENT_TIMESTAMP
             WHERE product_id = %s
-            RETURNING stock
         """
-        result = execute_query(query, (quantity, product_id), fetch_one=True)
+        execute_query(query1, (quantity, product_id))
+        
+        # Get the updated stock value
+        query2 = "SELECT stock FROM store_products WHERE product_id = %s"
+        result = execute_query(query2, (product_id,), fetch_one=True)
         
         if result:
             logger.info(f"Stock increased for product {product_id}: qty={quantity}, reason={reason}")

@@ -12,12 +12,15 @@ def get_shake_flavors():
 def request_shake(user_id: int, flavor_id: int, notes: str = ""):
     """Create a shake request"""
     try:
-        query = """
+        query1 = """
             INSERT INTO shake_requests (user_id, flavor_id, notes, status)
             VALUES (%s, %s, %s, 'pending')
-            RETURNING *
         """
-        result = execute_query(query, (user_id, flavor_id, notes), fetch_one=True)
+        execute_query(query1, (user_id, flavor_id, notes))
+        
+        # Get the created record
+        query2 = "SELECT * FROM shake_requests WHERE user_id = %s AND flavor_id = %s ORDER BY shake_request_id DESC LIMIT 1"
+        result = execute_query(query2, (user_id, flavor_id), fetch_one=True)
         logger.info(f"Shake request created for user {user_id}, flavor_id {flavor_id}")
         return result
     except Exception as e:
@@ -67,15 +70,24 @@ def approve_shake(shake_id: int, admin_user_id: int):
             existing['already_processed'] = True
             return existing
 
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET status = 'ready', prepared_by = %s, prepared_at = CURRENT_TIMESTAMP
             WHERE shake_request_id = %s AND status = 'pending'
-            RETURNING *, 
-                (SELECT telegram_id FROM users WHERE user_id = shake_requests.user_id) as telegram_id,
-                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
         """
-        result = execute_query(query, (admin_user_id, shake_id), fetch_one=True)
+        execute_query(query1, (admin_user_id, shake_id))
+        
+        # Get the result with related data
+        query2 = """
+            SELECT sr.*, 
+                   u.telegram_id,
+                   sf.flavor_name
+            FROM shake_requests sr
+            LEFT JOIN users u ON sr.user_id = u.user_id
+            LEFT JOIN shake_flavors sf ON sr.flavor_id = sf.flavor_id
+            WHERE sr.shake_request_id = %s
+        """
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         if result:
             result['already_processed'] = False
             logger.info(f"Shake {shake_id} approved and ready")
@@ -87,13 +99,16 @@ def approve_shake(shake_id: int, admin_user_id: int):
 def complete_shake(shake_id: int):
     """Mark shake as served/completed"""
     try:
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET status = 'completed', completed_at = CURRENT_TIMESTAMP
             WHERE shake_request_id = %s
-            RETURNING *
         """
-        result = execute_query(query, (shake_id,), fetch_one=True)
+        execute_query(query1, (shake_id,))
+        
+        # Get the result
+        query2 = "SELECT * FROM shake_requests WHERE shake_request_id = %s"
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         logger.info(f"Shake {shake_id} completed")
         return result
     except Exception as e:
@@ -103,15 +118,24 @@ def complete_shake(shake_id: int):
 def cancel_shake(shake_id: int, reason: str = ""):
     """Cancel a shake request"""
     try:
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET status = 'cancelled', notes = CONCAT(notes, ' | Cancelled: ', %s)
             WHERE shake_request_id = %s
-            RETURNING *,
-                (SELECT telegram_id FROM users WHERE user_id = shake_requests.user_id) as telegram_id,
-                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
         """
-        result = execute_query(query, (reason, shake_id), fetch_one=True)
+        execute_query(query1, (reason, shake_id))
+        
+        # Get the result with related data
+        query2 = """
+            SELECT sr.*,
+                   u.telegram_id,
+                   sf.flavor_name
+            FROM shake_requests sr
+            LEFT JOIN users u ON sr.user_id = u.user_id
+            LEFT JOIN shake_flavors sf ON sr.flavor_id = sf.flavor_id
+            WHERE sr.shake_request_id = %s
+        """
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         logger.info(f"Shake {shake_id} cancelled: {reason}")
         return result
     except Exception as e:
@@ -146,17 +170,25 @@ def get_flavor_statistics():
 def mark_shake_paid(shake_id: int, admin_id: int):
     """Mark shake order as PAID - approved for immediate preparation"""
     try:
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET payment_status = 'paid',
                 payment_terms = 'paid',
                 payment_approved_by = %s,
                 status = 'ready'
             WHERE shake_request_id = %s
-            RETURNING *, 
-                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
         """
-        result = execute_query(query, (admin_id, shake_id), fetch_one=True)
+        execute_query(query1, (admin_id, shake_id))
+        
+        # Get the result with related data
+        query2 = """
+            SELECT sr.*,
+                   sf.flavor_name
+            FROM shake_requests sr
+            LEFT JOIN shake_flavors sf ON sr.flavor_id = sf.flavor_id
+            WHERE sr.shake_request_id = %s
+        """
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         if result:
             logger.info(f"Shake {shake_id} marked as PAID by admin {admin_id}")
         return result
@@ -171,7 +203,7 @@ def mark_shake_credit_terms(shake_id: int, admin_id: int):
         from datetime import datetime, timedelta
         due_date = datetime.now() + timedelta(days=7)
         
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET payment_status = 'pending',
                 payment_terms = 'credit',
@@ -180,10 +212,18 @@ def mark_shake_credit_terms(shake_id: int, admin_id: int):
                 status = 'ready',
                 follow_up_reminder_sent = FALSE
             WHERE shake_request_id = %s
-            RETURNING *, 
-                (SELECT flavor_name FROM shake_flavors WHERE flavor_id = shake_requests.flavor_id) as flavor_name
         """
-        result = execute_query(query, (due_date.date(), admin_id, shake_id), fetch_one=True)
+        execute_query(query1, (due_date.date(), admin_id, shake_id))
+        
+        # Get the result with related data
+        query2 = """
+            SELECT sr.*,
+                   sf.flavor_name
+            FROM shake_requests sr
+            LEFT JOIN shake_flavors sf ON sr.flavor_id = sf.flavor_id
+            WHERE sr.shake_request_id = %s
+        """
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         if result:
             logger.info(f"Shake {shake_id} marked as CREDIT TERMS by admin {admin_id}")
         return result
@@ -195,14 +235,17 @@ def mark_shake_credit_terms(shake_id: int, admin_id: int):
 def mark_user_paid_for_shake(shake_id: int, user_id: int):
     """User confirms payment for credit-based shake order"""
     try:
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET payment_status = 'user_confirmed',
                 follow_up_reminder_sent = TRUE
             WHERE shake_request_id = %s AND user_id = %s
-            RETURNING *
         """
-        result = execute_query(query, (shake_id, user_id), fetch_one=True)
+        execute_query(query1, (shake_id, user_id))
+        
+        # Get the result
+        query2 = "SELECT * FROM shake_requests WHERE shake_request_id = %s"
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         if result:
             logger.info(f"User {user_id} confirmed payment for shake {shake_id}")
         return result
@@ -214,14 +257,17 @@ def mark_user_paid_for_shake(shake_id: int, user_id: int):
 def approve_user_payment(shake_id: int, admin_id: int):
     """Admin approves user's payment confirmation for credit-based shake"""
     try:
-        query = """
+        query1 = """
             UPDATE shake_requests 
             SET payment_status = 'paid',
                 payment_approved_by = %s
             WHERE shake_request_id = %s
-            RETURNING *, user_id
         """
-        result = execute_query(query, (admin_id, shake_id), fetch_one=True)
+        execute_query(query1, (admin_id, shake_id))
+        
+        # Get the result
+        query2 = "SELECT *, user_id FROM shake_requests WHERE shake_request_id = %s"
+        result = execute_query(query2, (shake_id,), fetch_one=True)
         if result:
             user_id = result.get('user_id')
             # Update user fee_status to 'paid' when payment is approved

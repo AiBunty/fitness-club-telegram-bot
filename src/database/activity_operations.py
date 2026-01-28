@@ -10,20 +10,23 @@ def log_daily_activity(user_id: int, weight: float = None, water_cups: int = 0,
                        attendance: bool = False):
     """Log daily activity for a user"""
     try:
-        query = """
+        # MySQL: ON CONFLICT RETURNING pattern requires separate INSERT and SELECT
+        query1 = """
             INSERT INTO daily_logs 
             (user_id, log_date, weight, water_cups, meals_logged, habits_completed, attendance)
             VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id, log_date) 
-            DO UPDATE SET
-                weight = COALESCE(EXCLUDED.weight, daily_logs.weight),
-                water_cups = daily_logs.water_cups + EXCLUDED.water_cups,
-                meals_logged = EXCLUDED.meals_logged,
-                habits_completed = EXCLUDED.habits_completed,
-                attendance = EXCLUDED.attendance
-            RETURNING *
+            ON DUPLICATE KEY UPDATE
+                weight = IF(%s IS NOT NULL, %s, weight),
+                water_cups = water_cups + %s,
+                meals_logged = %s,
+                habits_completed = %s,
+                attendance = %s
         """
-        result = execute_query(query, (user_id, weight, water_cups, meals_logged, habits_completed, attendance), fetch_one=True)
+        execute_query(query1, (user_id, weight, water_cups, meals_logged, habits_completed, attendance, weight, weight, water_cups, meals_logged, habits_completed, attendance))
+        
+        # Get the result
+        query2 = "SELECT * FROM daily_logs WHERE user_id = %s AND log_date = CURRENT_DATE"
+        result = execute_query(query2, (user_id,), fetch_one=True)
         return result
     except Exception as e:
         logger.error(f"Failed to log daily activity: {e}")
@@ -66,14 +69,16 @@ def get_today_weight(user_id: int):
 
 def log_weight(user_id: int, weight: float):
     """Log weight for today"""
-    query = """
+    query1 = """
         INSERT INTO daily_logs (user_id, log_date, weight)
         VALUES (%s, CURRENT_DATE, %s)
-        ON CONFLICT (user_id, log_date)
-        DO UPDATE SET weight = %s
-        RETURNING *
+        ON DUPLICATE KEY UPDATE weight = %s
     """
-    result = execute_query(query, (user_id, weight, weight), fetch_one=True)
+    execute_query(query1, (user_id, weight, weight))
+    
+    # Get the result
+    query2 = "SELECT * FROM daily_logs WHERE user_id = %s AND log_date = CURRENT_DATE"
+    result = execute_query(query2, (user_id,), fetch_one=True)
     if result:
         logger.info(f"Weight logged for user {user_id}: {weight}kg")
         add_points(user_id, POINTS_CONFIG['weight_log'], 'weight_log', f'Weight logged: {weight}kg')
@@ -81,14 +86,16 @@ def log_weight(user_id: int, weight: float):
 
 def log_water(user_id: int, cups: int = 1):
     """Log water intake"""
-    query = """
+    query1 = """
         INSERT INTO daily_logs (user_id, log_date, water_cups)
         VALUES (%s, CURRENT_DATE, %s)
-        ON CONFLICT (user_id, log_date)
-        DO UPDATE SET water_cups = daily_logs.water_cups + %s
-        RETURNING *
+        ON DUPLICATE KEY UPDATE water_cups = water_cups + %s
     """
-    result = execute_query(query, (user_id, cups, cups), fetch_one=True)
+    execute_query(query1, (user_id, cups, cups))
+    
+    # Get the result
+    query2 = "SELECT * FROM daily_logs WHERE user_id = %s AND log_date = CURRENT_DATE"
+    result = execute_query(query2, (user_id,), fetch_one=True)
     if result:
         points = POINTS_CONFIG['water_500ml'] * cups
         logger.info(f"Water logged for user {user_id}: {cups} cups")
@@ -97,15 +104,16 @@ def log_water(user_id: int, cups: int = 1):
 
 def log_meal(user_id: int):
     """Log meal photo"""
-    query = """
+    query1 = """
         INSERT INTO daily_logs (user_id, log_date, meals_logged)
         VALUES (%s, CURRENT_DATE, 1)
-        ON CONFLICT (user_id, log_date)
-        DO UPDATE SET meals_logged = daily_logs.meals_logged + 1
-        WHERE daily_logs.meals_logged < 4
-        RETURNING *
+        ON DUPLICATE KEY UPDATE meals_logged = IF(meals_logged < 4, meals_logged + 1, meals_logged)
     """
-    result = execute_query(query, (user_id,), fetch_one=True)
+    execute_query(query1, (user_id,))
+    
+    # Get the result
+    query2 = "SELECT * FROM daily_logs WHERE user_id = %s AND log_date = CURRENT_DATE"
+    result = execute_query(query2, (user_id,), fetch_one=True)
     if result:
         logger.info(f"Meal logged for user {user_id}")
         add_points(user_id, POINTS_CONFIG['meal_photo'], 'meal_photo', 'Meal photo logged')
@@ -113,14 +121,16 @@ def log_meal(user_id: int):
 
 def log_habits(user_id: int):
     """Mark habits as completed"""
-    query = """
+    query1 = """
         INSERT INTO daily_logs (user_id, log_date, habits_completed)
         VALUES (%s, CURRENT_DATE, true)
-        ON CONFLICT (user_id, log_date)
-        DO UPDATE SET habits_completed = true
-        RETURNING *
+        ON DUPLICATE KEY UPDATE habits_completed = true
     """
-    result = execute_query(query, (user_id,), fetch_one=True)
+    execute_query(query1, (user_id,))
+    
+    # Get the result
+    query2 = "SELECT * FROM daily_logs WHERE user_id = %s AND log_date = CURRENT_DATE"
+    result = execute_query(query2, (user_id,), fetch_one=True)
     if result:
         logger.info(f"Habits completed for user {user_id}")
         add_points(user_id, POINTS_CONFIG['habits_complete'], 'habits_complete', 'Daily habits completed')

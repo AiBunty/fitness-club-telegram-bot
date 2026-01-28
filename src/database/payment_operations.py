@@ -31,11 +31,10 @@ def record_fee_payment(user_id: int, amount: float, payment_method: str = 'manua
         fee_paid_date = datetime.now().date()
         fee_expiry_date = fee_paid_date + timedelta(days=duration_days)
         
-        # Record payment transaction
+        # Record payment transaction - MySQL: Remove RETURNING clause
         query1 = """
             INSERT INTO fee_payments (user_id, amount, payment_method, status, notes)
             VALUES (%s, %s, %s, 'completed', %s)
-            RETURNING *
         """
         execute_query(query1, (user_id, amount, payment_method, notes))
         
