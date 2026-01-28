@@ -480,7 +480,7 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
         
         # Create AR receivable for full amount (credit)
         try:
-            from src.database.ar_operations import create_receivable, get_receivable_by_source
+            from src.database.ar_operations import create_receivable, get_receivable_by_source, get_receivable_breakdown
             from src.utils.event_dispatcher import schedule_followups
             
             # Create receivable for full amount
@@ -493,25 +493,30 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
                 final_amount=total_amount
             )
             
+            # If receivable created successfully, compute balance and schedule reminders
+            if receivable:
+                receivable_id = receivable.get('receivable_id') or receivable.get('id')
+                try:
+                    breakdown = get_receivable_breakdown(receivable_id)
+                    balance = breakdown.get('balance', 0)
+                except Exception:
+                    balance = 0
 
-                if success:
-                    # Schedule reminders if balance > 0 (48 hours from now)
-                    if balance > 0:
-                        from src.utils.event_dispatcher import schedule_followups
-                        from datetime import datetime, timedelta
-                
-                        reminder_time = datetime.now() + timedelta(hours=48)
-                        if context and getattr(context, 'application', None):
-                            schedule_followups(
-                                context.application,
-                                user_id,
-                                'PAYMENT_REMINDER_1',
-                                {
-                                    'amount_due': balance,
-                                    'due_in_hours': 48,
-                                },
-                                reminder_time,
-                            )
+                if balance > 0:
+                    from datetime import datetime, timedelta
+
+                    reminder_time = datetime.now() + timedelta(hours=48)
+                    if context and getattr(context, 'application', None):
+                        schedule_followups(
+                            context.application,
+                            user_id,
+                            'PAYMENT_REMINDER_1',
+                            {
+                                'amount_due': balance,
+                                'due_in_hours': 48,
+                            },
+                            reminder_time,
+                        )
 
                     # Notify user
                     try:
@@ -543,17 +548,6 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
                     )
             
                     return ConversationHandler.END
-                            await context.bot.send_message(
-                                chat_id=admin_id,
-                                text=admin_caption,
-                                reply_markup=admin_reply_markup,
-                                parse_mode="Markdown"
-                            )
-                        logger.info(f"Pay later notification sent to admin {admin_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to send pay later notification to admin {admin_id}: {e}")
-            except Exception as e:
-                logger.error(f"Error in pay later admin notification: {e}", exc_info=True)
         
         except Exception as e:
             logger.error(f"Error processing pay later credit: {e}", exc_info=True)
@@ -996,6 +990,19 @@ async def show_pending_subscriptions_list(update: Update, context: ContextTypes.
             parse_mode="Markdown"
         )
 
+
+
+async def cmd_admin_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command - show pending subscription requests"""
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        # If invoked via message
+        if update.message:
+            await update.message.reply_text("❌ Admin access only.")
+        else:
+            await update.callback_query.answer("❌ Admin access only.", show_alert=True)
+        return
+    return await show_pending_subscriptions_list(update, context)
 
 
 async def callback_admin_approve_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
