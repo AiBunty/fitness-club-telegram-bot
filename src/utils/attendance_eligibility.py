@@ -65,13 +65,14 @@ def check_attendance_eligibility(user_id: int) -> dict:
                 days_left = 3  # Default 3 days
             
             # Count attendances in grace period (last 7 days)
+            # CRITICAL: Use queue_date not request_date, count only approved attendances
             from src.database.connection import execute_query
             grace_count = execute_query(
                 """
                 SELECT COUNT(*) as count FROM attendance_queue
                 WHERE user_id = %s 
-                AND request_date >= CURRENT_DATE - INTERVAL '7 days'
-                AND status IN ('approved', 'pending')
+                AND queue_date >= CURRENT_DATE - INTERVAL '7 days'
+                AND status = 'approved'
                 """,
                 (user_id,),
                 fetch_one=True
@@ -79,10 +80,13 @@ def check_attendance_eligibility(user_id: int) -> dict:
             attendance_count = grace_count.get('count', 0) if grace_count else 0
             attempts_left = max(0, 3 - attendance_count)
             
-            logger.info(f"User {user_id} grace period: {days_left} days, {attempts_left} attempts left")
+            # FAIL SAFE: Return min(days_left, attempts_left) to enforce both constraints
+            effective_grace_left = min(days_left, attempts_left) if attempts_left > 0 else 0
+            
+            logger.info(f"User {user_id} grace period: {days_left} days left, {attempts_left} attempts left, effective: {effective_grace_left}")
             
             return {
-                'eligible': True,
+                'eligible': effective_grace_left > 0,
                 'reason': 'GRACE_PERIOD_ACTIVE',
                 'grace_days_left': days_left,
                 'grace_attempts_left': attempts_left

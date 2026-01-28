@@ -140,6 +140,7 @@ def check_duplicate_attendance(user_id: int) -> bool:
     """
     Atomic check for duplicate attendance on same day
     CRITICAL: Must be called within verify endpoint BEFORE creating attendance
+    Leverages database UNIQUE(user_id, queue_date) constraint for atomic enforcement
     
     Returns:
         True if attendance already exists today, False otherwise
@@ -147,7 +148,7 @@ def check_duplicate_attendance(user_id: int) -> bool:
     try:
         query = """
             SELECT 1 FROM attendance_queue 
-            WHERE user_id = %s AND request_date = CURRENT_DATE
+            WHERE user_id = %s AND queue_date = CURRENT_DATE
             LIMIT 1
         """
         result = execute_query(query, (user_id,), fetch_one=True)
@@ -167,7 +168,7 @@ def get_user_attendance_today(user_id: int):
     """Check if user already requested attendance today"""
     query = """
         SELECT * FROM attendance_queue 
-        WHERE user_id = %s AND request_date = CURRENT_DATE
+        WHERE user_id = %s AND queue_date = CURRENT_DATE
     """
     return execute_query(query, (user_id,), fetch_one=True)
 
@@ -176,9 +177,9 @@ def get_user_attendance_history(user_id: int, days: int = 30):
     query = """
         SELECT * FROM attendance_queue 
         WHERE user_id = %s 
-        AND request_date >= CURRENT_DATE - %s * INTERVAL '1 day'
+        AND queue_date >= CURRENT_DATE - %s * INTERVAL '1 day'
         AND status = 'approved'
-        ORDER BY request_date DESC
+        ORDER BY queue_date DESC
     """
     return execute_query(query, (user_id, days))
 
@@ -194,8 +195,8 @@ def get_monthly_attendance(user_id: int, month: int = None, year: int = None):
         FROM attendance_queue
         WHERE user_id = %s
         AND status = 'approved'
-        AND EXTRACT(MONTH FROM request_date) = %s
-        AND EXTRACT(YEAR FROM request_date) = %s
+        AND EXTRACT(MONTH FROM queue_date) = %s
+        AND EXTRACT(YEAR FROM queue_date) = %s
     """
     result = execute_query(query, (user_id, month, year), fetch_one=True)
     return result['days_attended'] if result else 0
@@ -209,9 +210,9 @@ def get_weekly_attendance_count(user_id: int):
         FROM attendance_queue
         WHERE user_id = %s
         AND status = 'approved'
-        AND request_date >= CURRENT_DATE - INTERVAL '7 days'
-        AND EXTRACT(DOW FROM request_date) != 0
-        AND request_date <= CURRENT_DATE
+        AND queue_date >= CURRENT_DATE - INTERVAL '7 days'
+        AND EXTRACT(DOW FROM queue_date) != 0
+        AND queue_date <= CURRENT_DATE
     """
     result = execute_query(query, (user_id,), fetch_one=True)
     return result['days_attended'] if result else 0
