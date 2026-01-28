@@ -73,9 +73,8 @@ def create_default_profile(user_id: int) -> dict:
     try:
         execute_query(
             """
-            INSERT INTO reminder_profile (user_id)
+            INSERT IGNORE INTO reminder_profile (user_id)
             VALUES (%s)
-            ON CONFLICT(user_id) DO NOTHING
             """,
             (user_id,),
         )
@@ -90,7 +89,7 @@ def toggle_water_reminder(user_id: int, enabled: bool) -> bool:
             """
             INSERT INTO reminder_profile (user_id, water_enabled)
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 water_enabled = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -113,7 +112,7 @@ def set_water_reminder_interval(user_id: int, interval_minutes: int) -> bool:
             """
             INSERT INTO reminder_profile (user_id, water_interval_minutes)
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 water_interval_minutes = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -132,7 +131,7 @@ def toggle_weight_reminder(user_id: int, enabled: bool) -> bool:
             """
             INSERT INTO reminder_profile (user_id, weight_enabled)
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 weight_enabled = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -156,7 +155,7 @@ def set_weight_reminder_time(user_id: int, time_str: str) -> bool:
             """
             INSERT INTO reminder_profile (user_id, weight_time)
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 weight_time = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -178,7 +177,7 @@ def toggle_meal_reminder(user_id: int, meal: str, enabled: bool) -> bool:
             f"""
             INSERT INTO reminder_profile (user_id, {col})
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 {col} = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,
@@ -205,7 +204,7 @@ def set_meal_reminder_time(user_id: int, meal: str, time_str: str) -> bool:
             f"""
             INSERT INTO reminder_profile (user_id, {col})
             VALUES (%s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 {col} = %s,
                 updated_at = CURRENT_TIMESTAMP
             """,

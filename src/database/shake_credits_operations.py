@@ -23,9 +23,8 @@ def init_user_credits(user_id: int):
     """Initialize shake credits for new user"""
     try:
         query = """
-            INSERT INTO shake_credits (user_id, total_credits, used_credits, available_credits)
+            INSERT IGNORE INTO shake_credits (user_id, total_credits, used_credits, available_credits)
             VALUES (%s, 0, 0, 0)
-            ON CONFLICT (user_id) DO NOTHING
         """
         execute_query(query, (user_id,))
         logger.info(f"Shake credits initialized for user {user_id}")

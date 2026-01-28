@@ -30,9 +30,8 @@ def add_staff(staff_id: int, added_by: int) -> bool:
     try:
         execute_query(
             """
-            INSERT INTO staff_members (staff_id, added_by)
+            INSERT IGNORE INTO staff_members (staff_id, added_by)
             VALUES (%s, %s)
-            ON CONFLICT (staff_id) DO NOTHING
             """,
             (staff_id, added_by),
         )

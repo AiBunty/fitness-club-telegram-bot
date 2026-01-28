@@ -27,9 +27,8 @@ def add_admin(admin_id: int, added_by: int) -> bool:
     try:
         execute_query(
             """
-            INSERT INTO admin_members (admin_id, added_by)
+            INSERT IGNORE INTO admin_members (admin_id, added_by)
             VALUES (%s, %s)
-            ON CONFLICT (admin_id) DO NOTHING
             """,
             (admin_id, added_by),
         )

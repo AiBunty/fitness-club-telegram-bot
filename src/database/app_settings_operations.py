@@ -49,8 +49,8 @@ def set_app_setting(key: str, value: str) -> None:
             """
             INSERT INTO app_settings (key, value, updated_at)
             VALUES (%s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value,
+            ON DUPLICATE KEY UPDATE
+                value = VALUES(value),
                 updated_at = CURRENT_TIMESTAMP
             """,
             (key, value),
