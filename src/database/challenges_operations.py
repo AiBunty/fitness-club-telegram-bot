@@ -41,20 +41,21 @@ def create_challenge(challenge_type: str, start_date: datetime = None, duration_
         # Determine status based on start date
         status = 'scheduled' if start_date > date.today() else 'active'
         
-        query = """
+        query1 = """
             INSERT INTO challenges 
             (name, description, challenge_type, start_date, end_date, 
              price, is_free, status, created_by)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING challenge_id, name, challenge_type, start_date, end_date, 
-                      price, is_free, status
         """
-        result = execute_query(
-            query, 
+        execute_query(
+            query1, 
             (name, description, challenge_type, start_date, end_date, 
-             price, is_free, status, created_by), 
-            fetch_one=True
+             price, is_free, status, created_by)
         )
+        
+        # Get the created challenge
+        query2 = "SELECT challenge_id, name, challenge_type, start_date, end_date, price, is_free, status FROM challenges WHERE name = %s AND challenge_type = %s ORDER BY challenge_id DESC LIMIT 1"
+        result = execute_query(query2, (name, challenge_type), fetch_one=True)
         logger.info(f"Challenge created: {challenge_type} - {name}")
         return result
     except Exception as e:
@@ -64,12 +65,15 @@ def create_challenge(challenge_type: str, start_date: datetime = None, duration_
 def join_challenge(user_id: int, challenge_id: int, status: str = 'approved'):
     """User joins a challenge"""
     try:
-        query = """
+        query1 = """
             INSERT INTO challenge_participants (challenge_id, user_id, joined_date, status)
             VALUES (%s, %s, CURRENT_TIMESTAMP, %s)
-            RETURNING *
         """
-        result = execute_query(query, (challenge_id, user_id, status), fetch_one=True)
+        execute_query(query1, (challenge_id, user_id, status))
+        
+        # Get the created record
+        query2 = "SELECT * FROM challenge_participants WHERE user_id = %s AND challenge_id = %s ORDER BY participant_id DESC LIMIT 1"
+        result = execute_query(query2, (user_id, challenge_id), fetch_one=True)
         logger.info(f"User {user_id} joined challenge {challenge_id} with status {status}")
         return result
     except Exception as e:

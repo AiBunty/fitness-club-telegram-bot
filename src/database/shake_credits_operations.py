@@ -93,9 +93,12 @@ def add_credits(user_id: int, credits: int, transaction_type: str, description: 
                 available_credits = available_credits + %s,
                 last_updated = CURRENT_TIMESTAMP
             WHERE user_id = %s
-            RETURNING total_credits, available_credits
         """
-        result = execute_query(query1, (credits, credits, user_id), fetch_one=True)
+        execute_query(query1, (credits, credits, user_id))
+        
+        # Get the updated result
+        query2 = "SELECT total_credits, available_credits FROM shake_credits WHERE user_id = %s"
+        result = execute_query(query2, (user_id,), fetch_one=True)
         
         if result:
             # Log transaction
@@ -149,9 +152,11 @@ def consume_credit(user_id: int, reason: str = "Shake consumed") -> bool:
 
             # Update aggregate cache row to reflect counts (best-effort, within same transaction)
             cur.execute(
-                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s RETURNING used_credits, available_credits",
+                "UPDATE shake_credits SET used_credits = COALESCE(used_credits,0) + 1, available_credits = GREATEST(COALESCE(available_credits,0) - 1, 0), last_updated = CURRENT_TIMESTAMP WHERE user_id = %s",
                 (user_id,)
             )
+            # Fetch updated values
+            cur.execute("SELECT used_credits, available_credits FROM shake_credits WHERE user_id = %s", (user_id,))
             updated = cur.fetchone()
 
             logger.info(f"Deducted 1 credit from user {user_id}. Ledger available before deduction: {avail}")
@@ -215,13 +220,16 @@ def create_purchase_request(user_id: int, credits: int, payment_method: str = 'u
     try:
         amount = credits * COST_PER_CREDIT
         
-        query = """
+        query1 = """
             INSERT INTO shake_purchases 
             (user_id, credits_requested, amount, payment_method, status)
             VALUES (%s, %s, %s, %s, 'pending')
-            RETURNING purchase_id, user_id, credits_requested, amount, payment_method, status, created_at
         """
-        result = execute_query(query, (user_id, credits, amount, payment_method), fetch_one=True)
+        execute_query(query1, (user_id, credits, amount, payment_method))
+        
+        # Get the created purchase request
+        query2 = "SELECT purchase_id, user_id, credits_requested, amount, payment_method, status, created_at FROM shake_purchases WHERE user_id = %s ORDER BY purchase_id DESC LIMIT 1"
+        result = execute_query(query2, (user_id,), fetch_one=True)
         
         if result:
             logger.info(f"Purchase request created for user {user_id}: {credits} credits (Rs {amount})")
@@ -296,7 +304,6 @@ def approve_purchase(purchase_id: int, admin_user_id: int, amount_paid: float = 
             UPDATE shake_purchases
             SET status = 'approved', approved_by = %s, approved_at = CURRENT_TIMESTAMP, amount_paid = %s
             WHERE purchase_id = %s
-            RETURNING purchase_id, user_id, credits_requested, status, approved_at, amount_paid
         """
         execute_query(query_update, (admin_user_id, final_amount_paid, purchase_id))
         
@@ -386,13 +393,16 @@ def reject_purchase(purchase_id: int, admin_user_id: int, reason: str = "") -> b
             purchase['already_processed'] = True
             return purchase
 
-        query = """
+        query1 = """
             UPDATE shake_purchases
             SET status = 'rejected', approved_by = %s, approved_at = CURRENT_TIMESTAMP
             WHERE purchase_id = %s AND status = 'pending'
-            RETURNING purchase_id, status
         """
-        result = execute_query(query, (admin_user_id, purchase_id), fetch_one=True)
+        execute_query(query1, (admin_user_id, purchase_id))
+        
+        # Get the updated result
+        query2 = "SELECT purchase_id, status FROM shake_purchases WHERE purchase_id = %s"
+        result = execute_query(query2, (purchase_id,), fetch_one=True)
         if result:
             result['already_processed'] = False
             logger.info(f"Purchase {purchase_id} rejected by admin {admin_user_id}")

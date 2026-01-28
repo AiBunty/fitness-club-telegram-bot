@@ -12,12 +12,15 @@ logger = logging.getLogger(__name__)
 def create_payment_request(user_id: int, amount: float = None, notes: str = "", proof_url: str = None):
     """User submits a payment request"""
     try:
-        query = """
+        query1 = """
             INSERT INTO payment_requests (user_id, amount, notes, payment_proof_url, status, requested_at)
             VALUES (%s, %s, %s, %s, 'pending', NOW())
-            RETURNING request_id
         """
-        result = execute_query(query, (user_id, amount, notes, proof_url), fetch_one=True)
+        execute_query(query1, (user_id, amount, notes, proof_url))
+        
+        # Get the created request
+        query2 = "SELECT request_id FROM payment_requests WHERE user_id = %s ORDER BY request_id DESC LIMIT 1"
+        result = execute_query(query2, (user_id,), fetch_one=True)
         
         if result:
             logger.info(f"Payment request created for user {user_id}, request_id: {result['request_id']}")
@@ -186,16 +189,19 @@ def reject_payment_request(request_id: int, admin_id: int, reason: str = ""):
             existing['already_processed'] = True
             return existing
 
-        query = """
+        query1 = """
             UPDATE payment_requests
             SET status = 'rejected',
                 reviewed_by = %s,
                 reviewed_at = NOW(),
                 rejection_reason = %s
             WHERE request_id = %s AND status = 'pending'
-            RETURNING request_id, user_id, status
         """
-        result = execute_query(query, (admin_id, reason, request_id), fetch_one=True)
+        execute_query(query1, (admin_id, reason, request_id))
+        
+        # Get the updated request
+        query2 = "SELECT request_id, user_id, status FROM payment_requests WHERE request_id = %s"
+        result = execute_query(query2, (request_id,), fetch_one=True)
         if result:
             result['already_processed'] = False
             logger.info(f"Payment request {request_id} rejected by admin {admin_id}")

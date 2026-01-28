@@ -26,14 +26,16 @@ def create_notification(user_id: int, notification_type: str, title: str = "",
         if not title:
             title = NOTIFICATION_TYPES.get(notification_type, 'Notification')
         
-        query = """
+        query1 = """
             INSERT INTO notifications (user_id, notification_type, title, description, 
                                      link_data, status, created_at)
             VALUES (%s, %s, %s, %s, %s, 'unread', CURRENT_TIMESTAMP)
-            RETURNING *
         """
-        result = execute_query(query, (user_id, notification_type, title, description, link_data), 
-                              fetch_one=True)
+        execute_query(query1, (user_id, notification_type, title, description, link_data))
+        
+        # Get the created notification
+        query2 = "SELECT * FROM notifications WHERE user_id = %s AND notification_type = %s ORDER BY notification_id DESC LIMIT 1"
+        result = execute_query(query2, (user_id, notification_type), fetch_one=True)
         logger.info(f"Notification created for user {user_id}: {notification_type}")
         return result
     except Exception as e:

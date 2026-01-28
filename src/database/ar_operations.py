@@ -12,11 +12,15 @@ def create_receivable(user_id: int, receivable_type: str, source_id: Optional[in
     """Create an accounts_receivable record and return it."""
     if final_amount is None:
         final_amount = float(bill_amount) - float(discount_amount or 0)
-    sql = (
+    sql1 = (
         "INSERT INTO accounts_receivable (user_id, receivable_type, source_id, bill_amount, discount_amount, final_amount, status, due_date) "
-        "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING *"
+        "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)"
     )
-    row = execute_query(sql, (user_id, receivable_type, source_id, bill_amount, discount_amount, final_amount, due_date), fetch_one=True)
+    execute_query(sql1, (user_id, receivable_type, source_id, bill_amount, discount_amount, final_amount, due_date))
+    
+    # Get the created receivable
+    sql2 = "SELECT * FROM accounts_receivable WHERE user_id = %s AND receivable_type = %s AND source_id = %s ORDER BY receivable_id DESC LIMIT 1"
+    row = execute_query(sql2, (user_id, receivable_type, source_id), fetch_one=True)
     return row or {}
 
 
@@ -59,8 +63,12 @@ def update_receivable_status(receivable_id: int) -> Dict[str, Any]:
         new_status = 'partial'
     else:
         new_status = 'paid'
-    row = execute_query("UPDATE accounts_receivable SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE receivable_id=%s RETURNING *",
-                        (new_status, receivable_id), fetch_one=True)
+    execute_query("UPDATE accounts_receivable SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE receivable_id=%s",
+                        (new_status, receivable_id))
+    
+    # Get the updated receivable
+    row = execute_query("SELECT * FROM accounts_receivable WHERE receivable_id=%s",
+                        (receivable_id,), fetch_one=True)
     return row or {}
 
 
