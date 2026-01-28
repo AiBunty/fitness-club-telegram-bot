@@ -14,22 +14,52 @@ def user_exists(user_id: int) -> bool:
 
 def create_user(user_id: int, username: str, full_name: str, 
                 phone: str, age: int, initial_weight: float, gender: str = None, profile_pic_url: str = None):
+    """Create user - MySQL compatible version (no RETURNING clause)
+    
+    Args:
+        user_id: Telegram user ID (64-bit)
+        username: Telegram username (for display)
+        full_name: User's full name
+        phone: Phone number
+        age: Age in years
+        initial_weight: Initial weight in kg
+        gender: Gender (optional)
+        profile_pic_url: Telegram file_id for profile picture (optional)
+    
+    Returns:
+        dict: Created user record with user_id, full_name, referral_code, profile_pic_url
+    """
     referral_code = secrets.token_urlsafe(6)[:8].upper()
-    query = """
+    
+    # INSERT query - MySQL compatible (no RETURNING clause - removed for MySQL)
+    insert_query = """
         INSERT INTO users (
             user_id, telegram_username, full_name, phone, age,
             initial_weight, current_weight, gender, profile_pic_url, referral_code, approval_status
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'approved')
-        RETURNING user_id, full_name, referral_code, profile_pic_url
     """
-    result = execute_query(
-        query,
-        (user_id, username, full_name, phone, age, 
-         initial_weight, initial_weight, gender, profile_pic_url, referral_code),
-        fetch_one=True
-    )
-    logger.info(f"User created (auto-approved): {user_id} - {full_name}")
-    return result
+    
+    try:
+        # Execute INSERT
+        execute_query(
+            insert_query,
+            (user_id, username, full_name, phone, age, 
+             initial_weight, initial_weight, gender, profile_pic_url, referral_code),
+            fetch_one=False
+        )
+        
+        # Retrieve the created user - MySQL compatible (separate SELECT instead of RETURNING)
+        result = execute_query(
+            "SELECT user_id, full_name, referral_code, profile_pic_url FROM users WHERE user_id = %s",
+            (user_id,),
+            fetch_one=True
+        )
+        
+        logger.info(f"User created (auto-approved): {user_id} - {full_name}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to create user {user_id} ({full_name}): {e}")
+        raise
 
 def get_user(user_id: int):
     """Get user by Telegram user ID (64-bit BigInt)
