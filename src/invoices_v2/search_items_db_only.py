@@ -29,6 +29,42 @@ from src.database.connection import execute_query
 
 logger = logging.getLogger(__name__)
 
+def _get_store_items_schema() -> Dict[str, bool]:
+    """Detect store_items schema columns in the live database."""
+    try:
+        rows = execute_query(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='store_items'",
+            fetch_one=False
+        ) or []
+        cols = {r.get('COLUMN_NAME') for r in rows}
+        return {
+            'has_store_items': bool(cols),
+            'has_serial_name': {'serial', 'name', 'mrp', 'gst'}.issubset(cols),
+            'has_item_name': {'item_id', 'item_name', 'mrp', 'gst_percent'}.issubset(cols),
+            'has_serial_no': 'serial_no' in cols,
+            'has_normalized_name': 'normalized_item_name' in cols,
+        }
+    except Exception as e:
+        logger.error(f"[INVOICE_ITEM_SEARCH] schema detect failed: {e}")
+        return {
+            'has_store_items': False,
+            'has_serial_name': False,
+            'has_item_name': False,
+            'has_serial_no': False,
+            'has_normalized_name': False,
+        }
+
+
+def _log_store_items_count():
+    try:
+        row = execute_query("SELECT COUNT(*) as count FROM store_items", fetch_one=True)
+        count = row.get('count') if row else 0
+        logger.info(f"[INVOICE_ITEM_SEARCH] store_items_count={count}")
+    except Exception as e:
+        logger.error(f"[INVOICE_ITEM_SEARCH] count failed: {e}")
+
+
 def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
     """
     Search store items from DATABASE ONLY.
@@ -57,9 +93,60 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
     logger.info(f"[INVOICE_ITEM_SEARCH] db_only_search query='{query}' limit={limit}")
     
     try:
+        schema = _get_store_items_schema()
+        if not schema['has_store_items']:
+            logger.error("[INVOICE_ITEM_SEARCH] store_items table not found")
+            return []
+
+        _log_store_items_count()
+
         # Try numeric search first (serial number)
         if query.isdigit():
             logger.info(f"[INVOICE_ITEM_SEARCH] numeric_search serial_no={query}")
+
+            if schema['has_serial_name']:
+                sql = """
+                    SELECT 
+                        serial AS item_id,
+                        serial AS serial_no,
+                        name AS item_name,
+                        mrp,
+                        gst AS gst_percent,
+                        1 AS is_active
+                    FROM store_items
+                    WHERE serial = %s
+                    LIMIT 1
+                """
+            else:
+                sql = """
+                    SELECT 
+                        item_id,
+                        COALESCE(serial_no, item_id) AS serial_no,
+                        item_name,
+                        mrp,
+                        gst_percent,
+                        COALESCE(is_active, 1) AS is_active
+                    FROM store_items
+                    WHERE COALESCE(serial_no, item_id) = %s
+                    LIMIT 1
+                """
+
+            results = execute_query(sql, (query,), fetch_one=False)
+
+            if results:
+                logger.info(f"[INVOICE_ITEM_SEARCH] numeric_match found serial={query}")
+                return results
+            logger.info(f"[INVOICE_ITEM_SEARCH] numeric_match NOT_FOUND serial={query}")
+            return []
+
+        # Text search: partial match on item_name
+        # CRITICAL: Do NOT search users table!
+        search_term = query.lower()
+        like_pattern = f"%{search_term}%"
+
+        logger.info(f"[INVOICE_ITEM_SEARCH] text_search term='{search_term}'")
+
+        if schema['has_serial_name']:
             sql = """
                 SELECT 
                     serial AS item_id,
@@ -69,61 +156,55 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
                     gst AS gst_percent,
                     1 AS is_active
                 FROM store_items
-                WHERE serial = %s
-                LIMIT 1
+                WHERE LOWER(name) LIKE %s
+                ORDER BY 
+                    CASE 
+                        WHEN LOWER(name) = %s THEN 0
+                        WHEN LOWER(name) LIKE %s THEN 1
+                        ELSE 2
+                    END,
+                    name ASC
+                LIMIT %s
             """
-            results = execute_query(sql, (query,), fetch_one=False)
-            
-            if results:
-                logger.info(f"[INVOICE_ITEM_SEARCH] numeric_match found serial={query}")
-                return results
+            params = (like_pattern, search_term, f"{search_term}%", limit)
+        else:
+            normalized_clause = "OR LOWER(COALESCE(normalized_item_name, '')) LIKE %s" if schema['has_normalized_name'] else ""
+            sql = f"""
+                SELECT 
+                    item_id,
+                    COALESCE(serial_no, item_id) AS serial_no,
+                    item_name,
+                    mrp,
+                    gst_percent,
+                    COALESCE(is_active, 1) AS is_active
+                FROM store_items
+                WHERE (
+                    LOWER(item_name) LIKE %s
+                    {normalized_clause}
+                )
+                AND (COALESCE(is_active, 1) = 1)
+                ORDER BY 
+                    CASE 
+                        WHEN LOWER(item_name) = %s THEN 0
+                        WHEN LOWER(item_name) LIKE %s THEN 1
+                        ELSE 2
+                    END,
+                    item_name ASC
+                LIMIT %s
+            """
+            if schema['has_normalized_name']:
+                params = (like_pattern, like_pattern, search_term, f"{search_term}%", limit)
             else:
-                logger.info(f"[INVOICE_ITEM_SEARCH] numeric_match NOT_FOUND serial={query}")
-                return []
-        
-        # Text search: partial match on item_name
-        # CRITICAL: Do NOT search users table!
-        search_term = query.lower()
-        like_pattern = f"%{search_term}%"
-        
-        logger.info(f"[INVOICE_ITEM_SEARCH] text_search term='{search_term}'")
-        
-        sql = """
-            SELECT 
-                serial AS item_id,
-                serial AS serial_no,
-                name AS item_name,
-                mrp,
-                gst AS gst_percent,
-                1 AS is_active
-            FROM store_items
-            WHERE LOWER(name) LIKE %s
-            ORDER BY 
-                CASE 
-                    WHEN LOWER(name) = %s THEN 0
-                    WHEN LOWER(name) LIKE %s THEN 1
-                    ELSE 2
-                END,
-                name ASC
-            LIMIT %s
-        """
-        
-        exact_match = search_term
-        starts_with = f"{search_term}%"
-        
-        results = execute_query(
-            sql,
-            (like_pattern, exact_match, starts_with, limit),
-            fetch_one=False
-        )
-        
+                params = (like_pattern, search_term, f"{search_term}%", limit)
+
+        results = execute_query(sql, params, fetch_one=False)
+
         if results:
             logger.info(f"[INVOICE_ITEM_SEARCH] text_match found {len(results)} item(s)")
             return results
-        else:
-            logger.info(f"[INVOICE_ITEM_SEARCH] text_match NOT_FOUND term='{search_term}'")
-            return []
-    
+        logger.info(f"[INVOICE_ITEM_SEARCH] text_match NOT_FOUND term='{search_term}'")
+        return []
+
     except Exception as e:
         logger.error(f"[INVOICE_ITEM_SEARCH] error: {e}")
         return []
