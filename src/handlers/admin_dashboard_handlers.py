@@ -11,7 +11,14 @@ import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler
 from src.database.user_operations import (
-    get_all_users, get_user, delete_user, ban_user, unban_user, is_user_banned
+    get_user,
+    delete_user,
+    ban_user,
+    unban_user,
+    is_user_banned,
+    get_manage_users_page,
+    get_manage_users_count,
+    MANAGE_USERS_FILTERS
 )
 from src.utils.auth import is_admin
 from src.utils.message_templates import get_template, save_template
@@ -29,6 +36,26 @@ logger = logging.getLogger(__name__)
 
 # Conversation states for user management (high-range to avoid collisions)
 MANAGE_USER_MENU, SELECT_USER_ACTION, CONFIRM_DELETE, ENTER_BAN_REASON = range(5000, 5004)
+
+# Manage Users list defaults
+MANAGE_USERS_PER_PAGE = 25
+MANAGE_USERS_INACTIVE_DAYS = 90
+
+
+def _normalize_filter(filter_type: str) -> str:
+    filter_type = (filter_type or 'all').lower()
+    return filter_type if filter_type in MANAGE_USERS_FILTERS else 'all'
+
+
+def _filter_label(filter_type: str) -> str:
+    labels = {
+        'all': 'All Users',
+        'paid': 'Paid Users',
+        'unpaid': 'Unpaid Users',
+        'active': 'Active (Paid)',
+        'inactive': f'Inactive {MANAGE_USERS_INACTIVE_DAYS}d (Unpaid)'
+    }
+    return labels.get(filter_type, 'All Users')
 
 
 async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -324,38 +351,39 @@ async def cmd_member_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get page number from callback data or default to 1
     try:
         page = int(query.data.split('_')[-1]) if '_' in query.data else 1
-    except:
+    except Exception:
         page = 1
-    
-    users = get_all_users()
-    if not users:
-        await query.edit_message_text("📭 No members found.")
+
+    filter_type = _normalize_filter(context.user_data.get('members_filter', 'all'))
+    per_page = MANAGE_USERS_PER_PAGE
+
+    total_count = get_manage_users_count(filter_type, MANAGE_USERS_INACTIVE_DAYS)
+    if total_count == 0:
+        await query.edit_message_text("📭 No members found for this filter.")
         return
-    
-    # Pagination: 10 members per page
-    per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page
+
+    total_pages = (total_count + per_page - 1) // per_page
     page = max(1, min(page, total_pages))
-    
-    start_idx = (page - 1) * per_page
-    end_idx = start_idx + per_page
-    page_users = users[start_idx:end_idx]
-    
-    # Build member list message
+
+    offset = (page - 1) * per_page
+    page_users = get_manage_users_page(
+        filter_type=filter_type,
+        limit=per_page,
+        offset=offset,
+        inactive_days=MANAGE_USERS_INACTIVE_DAYS
+    ) or []
+
+    # Build member list message (Name + Telegram ID only)
     message = "👥 *Member List*\n\n"
-    message += f"Page {page}/{total_pages} (Total: {len(users)} members)\n"
-    message += "─────────────────────────\n\n"
-    
+    message += f"Filter: *{_filter_label(filter_type)}*\n"
+    message += f"Page {page}/{total_pages} (Total: {total_count})\n"
+    message += "─────────────────────────\n"
+    message += "Tap to copy the ID:\n\n"
+
     for user in page_users:
-        status = "🚫" if user.get('is_banned') else "✅"
-        role_emoji = "👑" if user['role'] == 'super_admin' else "👮" if user['role'] == 'staff' else "👤"
-        
-        message += f"{status} {role_emoji} *{user['full_name']}*\n"
-        message += f"   📱 {user['phone']}\n"
-        message += f"   💳 Status: {user['fee_status']}\n"
-        message += f"   📅 Joined: {user['created_at']}\n"
-        message += f"   🆔 ID: `{user['user_id']}`\n"
-        message += "─────────────────────────\n"
+        name = user.get('full_name') or "Unknown"
+        uid = user.get('user_id') or "?"
+        message += f"• *{name}* — `{uid}`\n"
     
     # Build navigation and action buttons
     keyboard = []
@@ -372,8 +400,19 @@ async def cmd_member_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Action buttons
     keyboard.append([
-        InlineKeyboardButton("🔍 Filter", callback_data="admin_filter_members"),
-        InlineKeyboardButton("👤 Select User", callback_data="admin_select_user")
+        InlineKeyboardButton("✅ Paid", callback_data="admin_members_filter_paid"),
+        InlineKeyboardButton("❌ Unpaid", callback_data="admin_members_filter_unpaid")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🟢 Active", callback_data="admin_members_filter_active"),
+        InlineKeyboardButton("⚪ Inactive 90d", callback_data="admin_members_filter_inactive")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("👥 All", callback_data="admin_members_filter_all"),
+        InlineKeyboardButton("📥 Export Excel", callback_data=f"admin_export_excel_filter_{filter_type}")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("👤 Manage User (Enter ID)", callback_data="admin_manage_users")
     ])
     
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard_menu")])
@@ -385,6 +424,23 @@ async def cmd_member_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+
+async def callback_member_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle filter selection for member list."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Admin access only.", show_alert=True)
+        return
+
+    await query.answer()
+
+    filter_type = query.data.replace("admin_members_filter_", "", 1)
+    filter_type = _normalize_filter(filter_type)
+    context.user_data['members_filter'] = filter_type
+
+    # Reset to page 1 after filter change
+    await cmd_member_list(update, context)
 
 
 async def cmd_manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,7 +576,6 @@ async def handle_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYP
     
     message = f"👤 *User Details*\n\n"
     message += f"Name: *{user['full_name']}*\n"
-    message += f"📱 Phone: {user['phone']}\n"
     message += f"Age: {user['age']}\n"
     message += f"Gender: {user.get('gender', 'N/A')}\n"
     message += f"Role: {user['role']}\n"
@@ -769,19 +824,29 @@ async def cmd_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     try:
-        # Get all users
-        users = get_all_users()
-        if not users:
+        filter_type = 'all'
+        if query.data.startswith("admin_export_excel_filter_"):
+            filter_type = _normalize_filter(query.data.replace("admin_export_excel_filter_", "", 1))
+
+        total_count = get_manage_users_count(filter_type, MANAGE_USERS_INACTIVE_DAYS)
+        if total_count == 0:
             await query.edit_message_text("📭 No members to export.")
             return
+
+        users = get_manage_users_page(
+            filter_type=filter_type,
+            limit=total_count,
+            offset=0,
+            inactive_days=MANAGE_USERS_INACTIVE_DAYS
+        ) or []
         
         # Create Excel workbook
         workbook = openpyxl.Workbook()
         worksheet = workbook.active
         worksheet.title = "Members"
         
-        # Define headers
-        headers = ["User ID", "Name", "Phone", "Gender", "Age", "Role", "Fee Status", "Joined Date", "Status"]
+        # Define headers (no phone numbers)
+        headers = ["User ID", "Name", "Fee Status", "Last Activity", "Status"]
         
         # Style headers
         header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -797,32 +862,25 @@ async def cmd_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Write data
         for row, user in enumerate(users, 2):
-            worksheet.cell(row=row, column=1).value = user['user_id']
-            worksheet.cell(row=row, column=2).value = user['full_name']
-            worksheet.cell(row=row, column=3).value = user['phone']
-            worksheet.cell(row=row, column=4).value = user.get('gender', 'N/A')
-            worksheet.cell(row=row, column=5).value = user.get('age', 'N/A')
-            worksheet.cell(row=row, column=6).value = user.get('role', 'user')
-            worksheet.cell(row=row, column=7).value = user['fee_status']
-            worksheet.cell(row=row, column=8).value = str(user['created_at'])
-            
-            status = "🚫 Banned" if user.get('is_banned') else "✅ Active"
-            worksheet.cell(row=row, column=9).value = status
-            
+            worksheet.cell(row=row, column=1).value = user.get('user_id')
+            worksheet.cell(row=row, column=2).value = user.get('full_name')
+            worksheet.cell(row=row, column=3).value = user.get('fee_status') or 'unpaid'
+            worksheet.cell(row=row, column=4).value = str(user.get('last_activity') or '')
+
+            is_inactive = bool(user.get('is_inactive'))
+            status = "Inactive (unpaid)" if is_inactive else "Active"
+            worksheet.cell(row=row, column=5).value = status
+
             # Center align all cells
-            for col in range(1, 10):
+            for col in range(1, 6):
                 worksheet.cell(row=row, column=col).alignment = Alignment(horizontal="center", vertical="center")
         
         # Adjust column widths
         worksheet.column_dimensions['A'].width = 12
-        worksheet.column_dimensions['B'].width = 20
-        worksheet.column_dimensions['C'].width = 15
-        worksheet.column_dimensions['D'].width = 12
-        worksheet.column_dimensions['E'].width = 10
-        worksheet.column_dimensions['F'].width = 12
-        worksheet.column_dimensions['G'].width = 12
-        worksheet.column_dimensions['H'].width = 18
-        worksheet.column_dimensions['I'].width = 12
+        worksheet.column_dimensions['B'].width = 24
+        worksheet.column_dimensions['C'].width = 12
+        worksheet.column_dimensions['D'].width = 20
+        worksheet.column_dimensions['E'].width = 16
         
         # Save to bytes
         excel_file = io.BytesIO()
@@ -831,20 +889,26 @@ async def cmd_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"Members_Export_{timestamp}.xlsx"
+        filename = f"Members_Export_{filter_type}_{timestamp}.xlsx"
         
         await context.bot.send_document(
             chat_id=query.from_user.id,
             document=excel_file,
             filename=filename,
-            caption=f"📊 *Member Export*\n\nTotal members: {len(users)}\nExported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            caption=(
+                f"📊 *Member Export*\n\n"
+                f"Filter: {_filter_label(filter_type)}\n"
+                f"Total members: {len(users)}\n"
+                f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
         )
         
-        logger.info(f"Admin {query.from_user.id} exported {len(users)} members to Excel")
+        logger.info(f"Admin {query.from_user.id} exported {len(users)} members to Excel (filter={filter_type})")
         
         # Show confirmation
         await query.edit_message_text(
             f"✅ *Export Complete*\n\n"
+            f"Filter: {_filter_label(filter_type)}\n"
             f"File: {filename}\n"
             f"Members exported: {len(users)}\n"
             f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",

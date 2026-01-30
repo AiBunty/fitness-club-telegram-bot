@@ -2,6 +2,121 @@ import logging
 import secrets
 from src.database.connection import execute_query
 
+# Manage Users filters (MySQL is the single source of truth)
+MANAGE_USERS_FILTERS = {
+    'all',
+    'paid',
+    'unpaid',
+    'active',
+    'inactive'
+}
+
+
+def _last_activity_expr(alias: str = 'u') -> str:
+    """SQL expression to compute last activity timestamp for a user.
+
+    Uses MySQL-compatible functions and existing tables.
+    """
+    return (
+        "GREATEST("
+        "IFNULL({alias}.created_at, '1970-01-01 00:00:00'),"
+        "IFNULL((SELECT MAX(created_at) FROM points_transactions pt WHERE pt.user_id = {alias}.user_id), '1970-01-01 00:00:00'),"
+        "IFNULL((SELECT MAX(requested_at) FROM attendance_queue aq WHERE aq.user_id = {alias}.user_id), '1970-01-01 00:00:00'),"
+        "IFNULL((SELECT MAX(created_at) FROM meal_photos mp WHERE mp.user_id = {alias}.user_id), '1970-01-01 00:00:00'),"
+        "IFNULL((SELECT MAX(created_at) FROM daily_logs dl WHERE dl.user_id = {alias}.user_id), '1970-01-01 00:00:00')"
+        ")"
+    ).format(alias=alias)
+
+
+def get_manage_users_count(filter_type: str = 'all', inactive_days: int = 90) -> int:
+    """Get total count of users for Manage Users list with filters.
+
+    active = paid users only.
+    inactive = unpaid users with no activity for inactive_days.
+    """
+    filter_type = (filter_type or 'all').lower()
+    if filter_type not in MANAGE_USERS_FILTERS:
+        filter_type = 'all'
+
+    where_clauses = []
+    params = []
+
+    paid_clause = "(u.fee_status IN ('paid', 'active'))"
+    unpaid_clause = "(u.fee_status NOT IN ('paid', 'active') OR u.fee_status IS NULL)"
+    last_activity = _last_activity_expr('u')
+
+    if filter_type in ('paid', 'active'):
+        where_clauses.append(paid_clause)
+    elif filter_type == 'unpaid':
+        where_clauses.append(unpaid_clause)
+    elif filter_type == 'inactive':
+        where_clauses.append(unpaid_clause)
+        where_clauses.append(f"{last_activity} < DATE_SUB(NOW(), INTERVAL %s DAY)")
+        params.append(inactive_days)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    query = f"SELECT COUNT(*) as count FROM users u {where_sql}"
+    result = execute_query(query, tuple(params), fetch_one=True)
+    return result['count'] if result else 0
+
+
+def get_manage_users_page(
+    filter_type: str = 'all',
+    limit: int = 25,
+    offset: int = 0,
+    inactive_days: int = 90
+):
+    """Get paginated users for Manage Users list with filters and last activity.
+
+    Returns fields needed for display/export without relying on local files.
+    """
+    filter_type = (filter_type or 'all').lower()
+    if filter_type not in MANAGE_USERS_FILTERS:
+        filter_type = 'all'
+
+    where_clauses = []
+    params = []
+
+    paid_clause = "(u.fee_status IN ('paid', 'active'))"
+    unpaid_clause = "(u.fee_status NOT IN ('paid', 'active') OR u.fee_status IS NULL)"
+    last_activity = _last_activity_expr('u')
+
+    if filter_type in ('paid', 'active'):
+        where_clauses.append(paid_clause)
+    elif filter_type == 'unpaid':
+        where_clauses.append(unpaid_clause)
+    elif filter_type == 'inactive':
+        where_clauses.append(unpaid_clause)
+        where_clauses.append(f"{last_activity} < DATE_SUB(NOW(), INTERVAL %s DAY)")
+        params.append(inactive_days)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    query = f"""
+        SELECT
+            u.user_id,
+            u.telegram_username,
+            u.full_name,
+            u.role,
+            u.created_at,
+            u.fee_status,
+            {last_activity} as last_activity,
+            CASE
+                WHEN {unpaid_clause} AND {last_activity} < DATE_SUB(NOW(), INTERVAL %s DAY) THEN 1
+                ELSE 0
+            END as is_inactive
+        FROM users u
+        {where_sql}
+        ORDER BY last_activity DESC, u.created_at DESC
+        LIMIT %s OFFSET %s
+    """
+
+    params.append(inactive_days)
+    params.extend([limit, offset])
+
+    return execute_query(query, tuple(params))
+
 logger = logging.getLogger(__name__)
 
 def user_exists(user_id: int) -> bool:
@@ -128,13 +243,26 @@ def delete_user(user_id: int):
     # Delete all related records first to avoid foreign key violations
     tables_to_clean = [
         "subscription_payments",
-        "subscription_requests", 
+        "subscription_requests",
         "subscriptions",
         "attendance",
         "payment_requests",
         "activities",
         "reminder_preferences"
     ]
+
+    # Filter to only tables that exist in current MySQL schema
+    try:
+        existing = execute_query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (%s)" %
+            ",".join(["%s"] * len(tables_to_clean)),
+            tuple(tables_to_clean)
+        ) or []
+        existing_tables = {row.get('TABLE_NAME') for row in existing}
+        tables_to_clean = [t for t in tables_to_clean if t in existing_tables]
+    except Exception as e:
+        logger.debug(f"[DELETE_USER] Could not validate table list: {e}")
     
     deleted_counts = {}
     for table in tables_to_clean:
@@ -161,8 +289,9 @@ def delete_user(user_id: int):
             if result:
                 cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
                 conn.commit()
-                logger.info(f"[DELETE_USER] User deleted: {user_id} - {result[0]} (cleaned {sum(deleted_counts.values())} related records)")
-                return {'full_name': result[0]}
+                full_name = result['full_name'] if isinstance(result, dict) else result[0]
+                logger.info(f"[DELETE_USER] User deleted: {user_id} - {full_name} (cleaned {sum(deleted_counts.values())} related records)")
+                return {'full_name': full_name}
             else:
                 logger.warning(f"[DELETE_USER] User {user_id} not found in database")
                 return None
@@ -208,8 +337,9 @@ def ban_user(user_id: int, reason: str = None):
             conn.commit()
             
             if result:
-                logger.info(f"User banned: {user_id} - {result[0]}")
-                return {'full_name': result[0]}
+                full_name = result['full_name'] if isinstance(result, dict) else result[0]
+                logger.info(f"User banned: {user_id} - {full_name}")
+                return {'full_name': full_name}
             return None
     except Exception as e:
         if conn:
@@ -250,8 +380,9 @@ def unban_user(user_id: int):
             conn.commit()
             
             if result:
-                logger.info(f"User unbanned: {user_id} - {result[0]}")
-                return {'full_name': result[0]}
+                full_name = result['full_name'] if isinstance(result, dict) else result[0]
+                logger.info(f"User unbanned: {user_id} - {full_name}")
+                return {'full_name': full_name}
             return None
     except Exception as e:
         if conn:

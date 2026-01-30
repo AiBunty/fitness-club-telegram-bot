@@ -211,7 +211,8 @@ def main(start: bool = False):
     )
     from src.handlers.admin_dashboard_handlers import (
         cmd_admin_panel, cmd_member_list, cmd_manage_users, cmd_export_excel,
-        callback_back_to_admin_panel, get_manage_users_conversation_handler, get_template_conversation_handler, get_followup_conversation_handler
+        callback_member_filter, callback_back_to_admin_panel,
+        get_manage_users_conversation_handler, get_template_conversation_handler, get_followup_conversation_handler
     )
     from src.handlers.payment_handlers import (
         cmd_challenges, callback_pay_fee,
@@ -566,6 +567,8 @@ def main(start: bool = False):
     application.add_handler(CallbackQueryHandler(callback_reject_user, pattern=r'^reject_user_\d+$'))
     application.add_handler(CallbackQueryHandler(cmd_admin_panel, pattern="^admin_dashboard_menu$"))
     application.add_handler(CallbackQueryHandler(cmd_member_list, pattern="^admin_members_list"))
+    application.add_handler(CallbackQueryHandler(callback_member_filter, pattern="^admin_members_filter_"))
+    application.add_handler(CallbackQueryHandler(cmd_export_excel, pattern="^admin_export_excel_filter_"))
     application.add_handler(CallbackQueryHandler(cmd_export_excel, pattern="^admin_export_excel$"))
     application.add_handler(CallbackQueryHandler(callback_back_to_admin_panel, pattern="^admin_dashboard_menu$"))
     

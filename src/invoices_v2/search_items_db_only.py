@@ -62,14 +62,14 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
             logger.info(f"[INVOICE_ITEM_SEARCH] numeric_search serial_no={query}")
             sql = """
                 SELECT 
-                    item_id,
-                    serial_no,
-                    item_name,
+                    serial AS item_id,
+                    serial AS serial_no,
+                    name AS item_name,
                     mrp,
-                    gst_percent,
-                    is_active
+                    gst AS gst_percent,
+                    1 AS is_active
                 FROM store_items
-                WHERE serial_no = %s
+                WHERE serial = %s
                 LIMIT 1
             """
             results = execute_query(sql, (query,), fetch_one=False)
@@ -90,26 +90,21 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
         
         sql = """
             SELECT 
-                item_id,
-                serial_no,
-                item_name,
+                serial AS item_id,
+                serial AS serial_no,
+                name AS item_name,
                 mrp,
-                gst_percent,
-                is_active
+                gst AS gst_percent,
+                1 AS is_active
             FROM store_items
-            WHERE 
-                (
-                    LOWER(item_name) LIKE %s
-                    OR LOWER(COALESCE(normalized_item_name, '')) LIKE %s
-                )
-                AND (is_active = TRUE OR is_active = 1 OR is_active IS NULL)
+            WHERE LOWER(name) LIKE %s
             ORDER BY 
                 CASE 
-                    WHEN LOWER(item_name) = %s THEN 0
-                    WHEN LOWER(item_name) LIKE %s THEN 1
+                    WHEN LOWER(name) = %s THEN 0
+                    WHEN LOWER(name) LIKE %s THEN 1
                     ELSE 2
                 END,
-                item_name ASC
+                name ASC
             LIMIT %s
         """
         
@@ -118,7 +113,7 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
         
         results = execute_query(
             sql,
-            (like_pattern, like_pattern, exact_match, starts_with, limit),
+            (like_pattern, exact_match, starts_with, limit),
             fetch_one=False
         )
         
