@@ -477,6 +477,12 @@ def main(start: bool = False):
         handle_invoice_payment_confirm,
         handle_invoice_payment_reject,
     )
+    from src.invoices_v2.invoice_management import (
+        handle_admin_delete_invoice,
+        handle_admin_resend_invoice,
+        handle_manage_confirm_delete,
+        handle_manage_resend_invoice,
+    )
     application.add_handler(get_invoice_v2_handler())
     application.add_handler(CallbackQueryHandler(handle_pay_bill, pattern=r"^inv2_pay_[A-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(handle_reject_bill, pattern=r"^inv2_reject_[A-Z0-9]+$"))
@@ -485,6 +491,10 @@ def main(start: bool = False):
     application.add_handler(CallbackQueryHandler(handle_invoice_screenshot_skip, pattern=r"^inv2_skip_screenshot_"))
     application.add_handler(CallbackQueryHandler(handle_invoice_payment_confirm, pattern=r"^inv2_confirm_(cash|upi)_"))
     application.add_handler(CallbackQueryHandler(handle_invoice_payment_reject, pattern=r"^inv2_reject_(cash|upi)_"))
+    application.add_handler(CallbackQueryHandler(handle_admin_delete_invoice, pattern=r"^inv2_delete_"))
+    application.add_handler(CallbackQueryHandler(handle_admin_resend_invoice, pattern=r"^inv2_resend_"))
+    application.add_handler(CallbackQueryHandler(handle_manage_confirm_delete, pattern=r"^inv_manage_confirm_delete_"))
+    application.add_handler(CallbackQueryHandler(handle_manage_resend_invoice, pattern=r"^inv_manage_resend_"))
     logger.info("[BOT] Invoice v2 handlers registered (AFTER Management and Store)")
 
     # Registration and Approval Conversations (PRIORITY 4)

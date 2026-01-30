@@ -386,7 +386,8 @@ async def cmd_followup_settings(update: Update, context: ContextTypes.DEFAULT_TY
     keyboard = [
         [InlineKeyboardButton("⚙️ Tune Settings", callback_data="tune_followup_settings")],
         [InlineKeyboardButton("📊 View Follow-up Log", callback_data="view_followup_log")],
-        [InlineKeyboardButton("🔙 Back", callback_data="cmd_admin_dashboard")]
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -443,7 +444,10 @@ async def view_broadcast_history(update: Update, context: ContextTypes.DEFAULT_T
         text += f"📢 {broadcast_type}: {record['recipient_count']} users\n"
         text += "─────────────\n"
     
-    keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="cmd_admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')

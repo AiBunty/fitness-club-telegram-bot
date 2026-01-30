@@ -347,7 +347,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         admin_approve_shake, admin_complete_shake
     )
     from src.handlers.commerce_hub_handlers import (
-        cmd_manage_subscriptions, cmd_manage_store, cmd_manage_pt_plans, cmd_manage_events,
+        cmd_manage_subscriptions, cmd_manage_pt_plans, cmd_manage_events,
         handle_commerce_callbacks, cmd_user_store
     )
     from src.handlers.role_keyboard_handlers import show_role_menu
@@ -452,8 +452,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"[CALLBACK_FALLBACK] This indicates ConversationHandler failed to catch it - check handler registration order!")
         await query.answer("⚠️ Processing invoice request...")
         return
-    elif query.data == "cmd_manage_store":
-        await cmd_manage_store(update, context)
     elif query.data == "ar_record_payment":
         # Accounts receivable - record payment
         from src.handlers.ar_handlers import ar_start_record

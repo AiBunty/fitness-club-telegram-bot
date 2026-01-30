@@ -53,6 +53,7 @@ async def cmd_admin_challenges(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("📋 View Active", callback_data="admin_view_active_challenges")],
         [InlineKeyboardButton("💳 Payment Status", callback_data="admin_payment_status")],
         [InlineKeyboardButton("📊 Challenge Stats", callback_data="admin_challenge_stats")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)

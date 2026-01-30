@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 GST_TOGGLE, GST_MODE, GST_PERCENT = range(3)
 
 # Store item conversation states
-ITEM_NAME, ITEM_HSN, ITEM_MRP, ITEM_GST, BULK_UPLOAD_AWAIT, DELETE_SERIAL_OR_NAME, EDIT_SERIAL_OR_NAME, EDIT_FIELD, EDIT_VALUE = range(3, 12)
+ITEM_NAME, ITEM_HSN, ITEM_MRP, ITEM_GST, BULK_UPLOAD_AWAIT, DELETE_SERIAL_OR_NAME, EDIT_SERIAL_OR_NAME, EDIT_FIELD, EDIT_VALUE, BULK_UPLOAD_MODE_SELECT, BULK_UPLOAD_CONFIRM = range(3, 14)
 
 
 async def cmd_gst_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -42,7 +42,7 @@ async def cmd_gst_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Toggle GST ON", callback_data="gst_toggle_on") if not enabled else InlineKeyboardButton("Toggle GST OFF", callback_data="gst_toggle_off")],
         [InlineKeyboardButton("Mode: Inclusive" if mode=='inclusive' else "Mode: Exclusive", callback_data="gst_change_mode")],
         [InlineKeyboardButton("Edit Percentage", callback_data="gst_edit_percent")],
-        [InlineKeyboardButton("⬅ Back", callback_data="admin_dashboard")]
+        [InlineKeyboardButton("⬅ Back", callback_data="cmd_admin_back")]
     ])
 
     text = f"🧾 GST Settings\n\nEnabled: {enabled}\nMode: {mode}\nPercent: {percent}%"
@@ -133,7 +133,7 @@ async def cmd_create_store_items(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("📄 Download Existing Items", callback_data="store_download_existing")],
         [InlineKeyboardButton("🗑 Delete Item", callback_data="store_delete_item")],
         [InlineKeyboardButton("✏️ Edit Item Price/GST", callback_data="store_edit_item")],
-        [InlineKeyboardButton("⬅ Back", callback_data="admin_dashboard")],
+        [InlineKeyboardButton("⬅ Back", callback_data="cmd_admin_back")],
     ])
     await message.reply_text("🏬 Store Items Master\n\nChoose action:", reply_markup=kb)
     return ConversationHandler.END
@@ -260,10 +260,11 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text('No file found. Upload the Excel file.')
         return BULK_UPLOAD_AWAIT
     
-    logger.info(f"[STORE_BULK] upload_received filename={doc.file_name}")
+    admin_id = update.effective_user.id
+    logger.info(f"[STORE_BULK] upload_received filename={doc.file_name} admin={admin_id}")
     
     # Send immediate feedback to admin
-    await update.message.reply_text('⏳ Processing file, please wait...')
+    await update.message.reply_text('⏳ Processing file - validating data...')
     
     file = await doc.get_file()
     bio = BytesIO()
@@ -300,87 +301,139 @@ async def handle_uploaded_store_excel(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text('❌ Excel header mismatch. Required columns: Serial No, Item Name, HSN Code, MRP, GST %')
             return ConversationHandler.END
 
-        rows_read = 0
-        new_items = 0
-        updated_items = 0
-        skipped = 0
-        serial_conflicts = []
-
-        for r in rows[1:]:
-            rows_read += 1
-            try:
-                # Read values safely
-                serial_cell = r[serial_i] if serial_i < len(r) else None
-                serial_val = serial_cell if serial_cell is None else serial_cell
-                serial_raw = str(serial_val).strip() if serial_val not in (None, '') else ''
-
-                name = str(r[name_i]).strip() if name_i < len(r) and r[name_i] is not None else ''
-                hsn = str(r[hsn_i]).strip() if hsn_i < len(r) and r[hsn_i] is not None else ''
-                mrp_raw = r[mrp_i] if mrp_i < len(r) else None
-                gst_raw = r[gst_i] if gst_i < len(r) else None
-
-                # Validation
-                if not name or not hsn:
-                    skipped += 1
-                    continue
-                try:
-                    mrp = float(mrp_raw)
-                    gst = float(gst_raw)
-                except Exception:
-                    skipped += 1
-                    continue
-                if mrp <= 0 or gst < 0 or gst > 100:
-                    skipped += 1
-                    continue
-
-                # Case A: Serial present
-                if serial_raw:
-                    try:
-                        s = int(float(serial_raw))
-                    except Exception:
-                        skipped += 1
-                        continue
-                    # Update by serial only
-                    try:
-                        res = add_or_update_item({'serial': s, 'name': name, 'hsn': hsn, 'mrp': mrp, 'gst': gst})
-                        updated_items += 1
-                    except KeyError:
-                        # serial not found -> skip
-                        skipped += 1
-                        serial_conflicts.append(serial_raw)
-                        continue
-                else:
-                    # No serial: check by name+hsn
-                    res = add_or_update_item({'name': name, 'hsn': hsn, 'mrp': mrp, 'gst': gst})
-                    if res.get('is_new'):
-                        new_items += 1
-                    else:
-                        updated_items += 1
-
-            except Exception as e:
-                logger.warning(f"[STORE_BULK] skipped row due to exception: {e}")
-                skipped += 1
-                continue
+        # PHASE 1: VALIDATION (Read-Only)
+        from src.database.store_bulk_operations import validate_excel_data, batch_update_store_items, batch_replace_all_store_items, format_validation_errors, format_update_summary, format_replace_all_summary, get_items_to_delete
         
-        logger.info(f"[STORE_EXCEL] rows_read={rows_read}")
-        logger.info(f"[STORE_EXCEL] new_items={new_items}")
-        logger.info(f"[STORE_EXCEL] updated_items={updated_items}")
-        logger.info(f"[STORE_EXCEL] skipped_rows={skipped}")
-        if serial_conflicts:
-            logger.info(f"[STORE_EXCEL] serial_conflict={serial_conflicts}")
-
-        await update.message.reply_text(
-            f"✅ Bulk upload completed\n\n"
-            f"➕ New items added: {new_items}\n"
-            f"✏ Items updated (price/GST): {updated_items}\n"
-            f"⚠ Rows skipped: {skipped}"
+        header_map = {
+            'serial_no': serial_i,
+            'item_name': name_i,
+            'hsn_code': hsn_i,
+            'mrp': mrp_i,
+            'gst_percent': gst_i
+        }
+        
+        is_valid, errors, data_map = await validate_excel_data(rows, header_map)
+        
+        if not is_valid:
+            logger.warning(f"[STORE_BULK] Validation failed with {len(errors)} errors")
+            error_msg = format_validation_errors(errors)
+            await update.message.reply_text(error_msg, parse_mode='Markdown')
+            return BULK_UPLOAD_AWAIT
+        
+        # Store data for confirmation step
+        context.user_data['bulk_upload_data'] = {
+            'data_map': data_map,
+            'admin_id': admin_id
+        }
+        
+        # Show pre-confirmation summary with mode selection
+        excel_items = len(data_map)
+        items_to_delete = get_items_to_delete(list(data_map.keys()))
+        delete_count = len(items_to_delete) if items_to_delete else 0
+        
+        mode_msg = (
+            f"✅ *Validation Passed!*\n\n"
+            f"📊 *Excel contains {excel_items} items*\n\n"
         )
-        return ConversationHandler.END
+        
+        if delete_count > 0:
+            mode_msg += f"⚠️ *Database currently has {delete_count} old items NOT in your Excel*\n\n"
+            if delete_count <= 5:
+                mode_msg += f"Old items to delete: "
+                for item in items_to_delete[:5]:
+                    mode_msg += f"#{item['serial']} {item['name']}, "
+                mode_msg = mode_msg.rstrip(", ") + "\n\n"
+            else:
+                samples = items_to_delete[:3]
+                mode_msg += f"Sample old items: {', '.join([f'#{i['serial']} {i['name']}' for i in samples])}, ...and {delete_count - 3} more\n\n"
+        
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Just Update Items", callback_data="bulk_mode_update")],
+            [InlineKeyboardButton("🗑️ Keep Only Excel Items (Delete Old)", callback_data="bulk_mode_replace")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="bulk_cancel")]
+        ])
+        
+        await update.message.reply_text(mode_msg + "*Which mode do you want?*", parse_mode='Markdown', reply_markup=kb)
+        logger.info(f"[STORE_BULK] Validation passed - showing mode selection for {excel_items} items")
+        
+        return BULK_UPLOAD_MODE_SELECT
         
     except Exception as e:
         logger.error(f"[STORE_BULK] error parsing excel: {e}")
         await update.message.reply_text('❌ Failed to parse Excel. Ensure it is a valid .xlsx file with required columns.\n\nPlease upload a valid Excel file or type /cancel to exit.')
         return BULK_UPLOAD_AWAIT
+
+
+async def handle_bulk_mode_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle mode selection: Update only or Replace all"""
+    query = update.callback_query
+    await query.answer()
+    
+    admin_id = update.effective_user.id
+    mode = query.data  # 'bulk_mode_update', 'bulk_mode_replace', or 'bulk_cancel'
+    
+    if mode == 'bulk_cancel':
+        logger.info(f"[STORE_BULK] Mode selection cancelled by admin {admin_id}")
+        await query.message.reply_text("❌ Bulk upload cancelled. No changes were made.")
+        return ConversationHandler.END
+    
+    # Get stored data
+    bulk_data = context.user_data.get('bulk_upload_data', {})
+    if not bulk_data:
+        await query.message.reply_text('❌ Session expired. Please upload the Excel file again.')
+        return ConversationHandler.END
+    
+    data_map = bulk_data['data_map']
+    from src.database.store_bulk_operations import batch_update_store_items, batch_replace_all_store_items, format_update_summary, format_replace_all_summary, get_items_to_delete
+    
+    await query.message.reply_text('⏳ Processing your choice...')
+    logger.info(f"[STORE_BULK] Mode selected: {mode} for {len(data_map)} items")
+    
+    try:
+        if mode == 'bulk_mode_update':
+            # PHASE 2: Just update, don't delete old items
+            logger.info(f"[STORE_BULK] Starting Phase 2 - Atomic batch UPDATE (no deletions)")
+            success, changes_made, failed_serials = await batch_update_store_items(admin_id, data_map)
+            
+            if not success:
+                logger.error(f"[STORE_BULK] Atomic update FAILED - transaction rolled back")
+                await query.message.reply_text(
+                    "❌ *Update Failed*\n\n"
+                    "Transaction was rolled back. No changes were applied.\n\n"
+                    "Please check the logs and try again.",
+                    parse_mode='Markdown'
+                )
+                return ConversationHandler.END
+            
+            summary = format_update_summary(changes_made, failed_serials)
+            logger.info(f"[STORE_BULK] SUCCESS - Updated {len(changes_made)} items (kept old items)")
+            
+        else:  # bulk_mode_replace
+            # PHASE 2 EXTENDED: Update and delete old items
+            logger.info(f"[STORE_BULK] Starting Phase 2 Extended - Atomic batch REPLACE (delete old items)")
+            success, changes_made, failed_serials, deleted_items = await batch_replace_all_store_items(admin_id, data_map)
+            
+            if not success:
+                logger.error(f"[STORE_BULK] Atomic replace FAILED - transaction rolled back")
+                await query.message.reply_text(
+                    "❌ *Replace All Failed*\n\n"
+                    "Transaction was rolled back. No changes were applied.\n\n"
+                    "Please check the logs and try again.",
+                    parse_mode='Markdown'
+                )
+                return ConversationHandler.END
+            
+            summary = format_replace_all_summary(changes_made, failed_serials, deleted_items)
+            logger.info(f"[STORE_BULK] SUCCESS - Replaced all items ({len(changes_made)} kept/updated, {len(deleted_items)} deleted)")
+        
+        await query.message.reply_text(summary, parse_mode='Markdown')
+        context.user_data.pop('bulk_upload_data', None)  # Clean up
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"[STORE_BULK] error processing bulk upload: {e}")
+        await query.message.reply_text(f'❌ Error processing bulk upload: {str(e)[:100]}\n\nPlease try again or contact support.')
+        return ConversationHandler.END
 
 
 async def store_download_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -780,6 +833,9 @@ def get_store_and_gst_handlers():
             BULK_UPLOAD_AWAIT: [
                 MessageHandler(filters.Document.ALL, handle_uploaded_store_excel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bulk_upload_text)
+            ],
+            BULK_UPLOAD_MODE_SELECT: [
+                CallbackQueryHandler(handle_bulk_mode_selection, pattern='^bulk_mode_update$|^bulk_mode_replace$|^bulk_cancel$')
             ],
             DELETE_SERIAL_OR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_search)],
             EDIT_SERIAL_OR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit_search)],

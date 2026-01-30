@@ -165,30 +165,6 @@ async def process_create_plan(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
-# ============ Store Products Management ============
-
-async def cmd_manage_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: Manage store products"""
-    if not is_admin_id(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access only.")
-        return ConversationHandler.END
-    
-    keyboard = [
-        [InlineKeyboardButton("📥 Download Sample Excel", callback_data="store_download_template")],
-        [InlineKeyboardButton("📤 Bulk Upload Products", callback_data="store_bulk_upload")],
-        [InlineKeyboardButton("📋 List Products", callback_data="store_list")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="main_menu")],
-    ]
-    
-    await update.message.reply_text(
-        "🛒 *Manage Store Products*\n\n"
-        "Download the sample Excel template, fill in your products, then upload.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-    return MANAGE_MENU
-
-
 async def download_store_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send sample Excel template for store products"""
     try:

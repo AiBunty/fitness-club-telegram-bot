@@ -50,7 +50,6 @@ ADMIN_MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("🤖 Follow-up Settings", callback_data="cmd_followup_settings")],
     [InlineKeyboardButton("🍽️ Manual Shake Deduction", callback_data="cmd_manual_shake_deduction")],
     [InlineKeyboardButton("💳 Pending Shake Purchases", callback_data="cmd_pending_shake_purchases")],
-    [InlineKeyboardButton("🛒 Manage Store", callback_data="cmd_manage_store")],
     [InlineKeyboardButton("🧾 Invoices", callback_data="cmd_invoices")],
     [InlineKeyboardButton("🧾 GST Settings", callback_data="cmd_gst_settings")],
     [InlineKeyboardButton("🏬 Create Store Items", callback_data="cmd_create_store_items")],

@@ -46,7 +46,8 @@ async def cmd_invoice_reports(update: Update, context: CallbackContext):
         [InlineKeyboardButton("📈 6 Months", callback_data="invoice_six_months"),
          InlineKeyboardButton("📉 Yearly", callback_data="invoice_yearly")],
         [InlineKeyboardButton("🗓️ Custom Date Range", callback_data="invoice_custom")],
-        [InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="cmd_admin_panel")]
+        [InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -78,9 +79,10 @@ async def callback_invoice_report_monthly(update: Update, context: CallbackConte
     
     # Show month selection
     now = datetime.now()
-    keyboard = []
-    
-    # Current month and previous months
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Back to Reports", callback_data="cmd_invoice_reports")],
+            [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+        ]
     for i in range(12):
         d = datetime(now.year if i == 0 else now.year - 1, 
                      (now.month - i) if i < now.month else (12 + now.month - i), 1)
@@ -89,6 +91,8 @@ async def callback_invoice_report_monthly(update: Update, context: CallbackConte
         keyboard.append([InlineKeyboardButton(month_name, callback_data=callback)])
     
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cmd_invoice_reports")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -157,6 +161,7 @@ async def callback_invoice_report_quarterly(update: Update, context: CallbackCon
             keyboard.append([InlineKeyboardButton(quarter_name, callback_data=callback)])
     
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cmd_invoice_reports")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -221,6 +226,7 @@ async def callback_invoice_report_six_months(update: Update, context: CallbackCo
             keyboard.append([InlineKeyboardButton(half_name, callback_data=callback)])
     
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cmd_invoice_reports")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -282,6 +288,7 @@ async def callback_invoice_report_yearly(update: Update, context: CallbackContex
         keyboard.append([InlineKeyboardButton(str(year), callback_data=callback)])
     
     keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cmd_invoice_reports")])
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(

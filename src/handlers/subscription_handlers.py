@@ -517,37 +517,6 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
                             },
                             reminder_time,
                         )
-
-                    # Notify user
-                    try:
-                        end_date_str = end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'
-                        message = (
-                            f"✅ *Subscription Approved!*\n\n"
-                            f"Plan: {request_details.get('plan_id', 'N/A')}\n"
-                            f"Amount: Rs. {final_bill:,}\n"
-                            f"UPI Received: Rs. {upi_received:,}\n"
-                            f"Cash Received: Rs. {cash_received:,}\n"
-                            f"Balance: Rs. {balance:,}\n"
-                            f"Valid Until: {end_date_str}\n\n"
-                            f"Your subscription is now active! 🎉"
-                        )
-                        await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
-                        logger.info(f"Approval notification sent to user {user_id}")
-                    except Exception as e:
-                        logger.debug(f"Could not send approval notification to user: {e}")
-            
-                    # Update UI
-                    await query.edit_message_text(
-                        f"✅ Subscription Approved!\n\n"
-                        f"Final Bill: Rs. {final_bill:,}\n"
-                        f"UPI Received: Rs. {upi_received:,}\n"
-                        f"Cash Received: Rs. {cash_received:,}\n"
-                        f"Balance: Rs. {balance:,}\n"
-                        f"Valid Until: {end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'}\n\n"
-                        f"Reminders scheduled for outstanding balance."
-                    )
-            
-                    return ConversationHandler.END
         
         except Exception as e:
             logger.error(f"Error processing pay later credit: {e}", exc_info=True)

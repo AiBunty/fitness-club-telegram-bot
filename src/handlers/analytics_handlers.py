@@ -33,6 +33,7 @@ async def cmd_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("📊 Engagement", callback_data="dashboard_engagement"),
          InlineKeyboardButton("🏆 Challenges", callback_data="dashboard_challenges")],
         [InlineKeyboardButton("🔥 Top Activities", callback_data="dashboard_activities")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -66,7 +67,10 @@ async def callback_revenue_stats(update: Update, context: ContextTypes.DEFAULT_T
     message += f"Transactions: {monthly['transaction_count']}\n"
     message += f"Payers: {monthly['payers']}\n"
     
-    keyboard = [[InlineKeyboardButton("📊 Back to Dashboard", callback_data="admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -99,7 +103,10 @@ async def callback_member_stats(update: Update, context: ContextTypes.DEFAULT_TY
     message += f"Active Users: {stats['today_users']}\n"
     message += f"Activities Logged: {stats['today_activities']}\n"
     
-    keyboard = [[InlineKeyboardButton("📊 Back to Dashboard", callback_data="admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -127,7 +134,10 @@ async def callback_engagement_stats(update: Update, context: ContextTypes.DEFAUL
     message += f"Activities: {engagement['total_transactions']}\n"
     message += f"Avg Points/Activity: {int(engagement['avg_points_per_activity'] or 0)}\n"
     
-    keyboard = [[InlineKeyboardButton("📊 Back to Dashboard", callback_data="admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -157,7 +167,10 @@ async def callback_challenge_stats(update: Update, context: ContextTypes.DEFAULT
     message += f"Active Participants: {stats['active_participants']}\n"
     message += f"Users Completed: {stats['users_completed']}\n"
     
-    keyboard = [[InlineKeyboardButton("📊 Back to Dashboard", callback_data="admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
@@ -186,7 +199,10 @@ async def callback_top_activities(update: Update, context: ContextTypes.DEFAULT_
             message += f"   • Count: {activity['frequency']}\n"
             message += f"   • Points: {int(activity['total_points'] or 0)}\n\n"
     
-    keyboard = [[InlineKeyboardButton("📊 Back to Dashboard", callback_data="admin_dashboard")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 Back to Dashboard", callback_data="cmd_admin_dashboard")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(

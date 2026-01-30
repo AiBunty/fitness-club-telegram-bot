@@ -675,6 +675,7 @@ async def cmd_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🗑️ Delete User", callback_data="admin_delete_user"),
          InlineKeyboardButton("🚫 Ban User", callback_data="admin_ban_user")],
         [InlineKeyboardButton("✅ Unban User", callback_data="admin_unban_user")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     

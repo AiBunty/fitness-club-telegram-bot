@@ -1,7 +1,7 @@
 """Admin flow to edit the welcome message stored in DB."""
 
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
 from src.utils.auth import is_admin_id
 from src.utils.welcome_message import get_welcome_message, update_welcome_message
@@ -25,12 +25,16 @@ async def start_edit_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.callback_query.answer()
 
     current = get_welcome_message()
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ])
     await (update.callback_query.message if update.callback_query else update.message).reply_text(
         "📝 *Edit Welcome Message*\n\n"
         "Current message:\n\n"
         f"{current}\n\n"
         "Please send the new welcome message text.",
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=kb
     )
     return WAITING_FOR_WELCOME_TEXT
 
@@ -48,7 +52,10 @@ async def save_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_WELCOME_TEXT
 
     update_welcome_message(new_text)
-    await update.message.reply_text("✅ Welcome message updated successfully.")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ])
+    await update.message.reply_text("✅ Welcome message updated successfully.", reply_markup=kb)
     return ConversationHandler.END
 
 

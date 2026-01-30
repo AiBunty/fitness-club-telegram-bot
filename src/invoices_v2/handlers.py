@@ -15,6 +15,28 @@ from telegram.ext import (
 )
 
 from src.invoices_v2.state import InvoiceV2State
+from src.invoices_v2.invoice_management import (
+    show_invoice_main_menu,
+    handle_manage_menu,
+    handle_manage_choice,
+    handle_manage_search_input,
+    handle_manage_view_invoice,
+    handle_manage_delete_invoice,
+    handle_manage_confirm_delete,
+    handle_manage_resend_invoice,
+    handle_manage_edit_invoice,
+    handle_manage_edit_input,
+    handle_manage_items_menu,
+    handle_manage_item_action,
+    handle_manage_item_field,
+    handle_manage_item_value,
+    handle_manage_add_start,
+    handle_manage_add_name,
+    handle_manage_add_rate,
+    handle_manage_add_qty,
+    handle_manage_add_discount,
+    handle_manage_add_gst,
+)
 from src.invoices_v2.search_items_db_only import (
     search_store_items_db_only,
     format_item_for_display,
@@ -38,6 +60,22 @@ from src.utils.flow_manager import (
 logger = logging.getLogger(__name__)
 
 INVOICES_FILE = "data/invoices_v2.json"
+
+
+def _resolve_telegram_user_id(user: Optional[dict]) -> Optional[int]:
+    if not user:
+        return None
+    for key in ("telegram_id", "user_id"):
+        value = user.get(key)
+        if value is None:
+            continue
+        try:
+            value_int = int(value)
+            if value_int > 0:
+                return value_int
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def ensure_payment_tracking_fields(invoice_data: dict) -> dict:
@@ -131,17 +169,7 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "shipping": 0,
     }
     
-    text = "📄 *Invoice Menu*\n\nCreate a new invoice:"
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("➕ Create Invoice", callback_data="inv2_create_start")
-    ]])
-    
-    if query:
-        await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
-    else:
-        await update.effective_user.send_message(text, reply_markup=kb, parse_mode="Markdown")
-    
-    return InvoiceV2State.SEARCH_USER
+    return await show_invoice_main_menu(update, context)
 
 
 # ============================================================================
@@ -608,7 +636,14 @@ async def handle_send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     invoice_data = context.user_data["invoice_v2_data"]
     selected_user = invoice_data["selected_user"]
-    user_id = selected_user.get("telegram_id") or selected_user.get("user_id")
+    user_id = _resolve_telegram_user_id(selected_user)
+    if not user_id:
+        logger.error("[INVOICE_V2] failed_to_resolve_user_id selected_user=%s", selected_user)
+        await query.edit_message_text(
+            "❌ Unable to resolve Telegram user ID. Please re-select the user and try again."
+        )
+        clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
+        return ConversationHandler.END
     user_name = format_user_display(selected_user)
     
     # Save invoice
@@ -1377,6 +1412,64 @@ def get_invoice_v2_handler():
             CallbackQueryHandler(cmd_invoices_v2, pattern="^cmd_invoices$"),
         ],
         states={
+            InvoiceV2State.INVOICE_MENU: [
+                CallbackQueryHandler(search_user_start, pattern="^inv2_create_start$"),
+                CallbackQueryHandler(handle_manage_menu, pattern="^inv_manage_menu$"),
+                CallbackQueryHandler(handle_manage_choice, pattern="^inv_manage_recent$"),
+                CallbackQueryHandler(handle_cancel, pattern="^inv2_cancel$"),
+            ],
+            InvoiceV2State.MANAGE_MENU: [
+                CallbackQueryHandler(handle_manage_choice, pattern="^inv_manage_(by_user|by_invoice|last_3|last_7|month|recent|back)$"),
+            ],
+            InvoiceV2State.SEARCH_INVOICES: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_search_input),
+            ],
+            InvoiceV2State.SEARCH_RESULTS: [
+                CallbackQueryHandler(handle_manage_view_invoice, pattern="^inv_manage_view_"),
+                CallbackQueryHandler(handle_manage_menu, pattern="^inv_manage_menu$"),
+            ],
+            InvoiceV2State.VIEW_INVOICE: [
+                CallbackQueryHandler(handle_manage_resend_invoice, pattern="^inv_manage_resend_"),
+                CallbackQueryHandler(handle_manage_edit_invoice, pattern="^inv_manage_edit_"),
+                CallbackQueryHandler(handle_manage_items_menu, pattern="^inv_manage_items_"),
+                CallbackQueryHandler(handle_manage_add_start, pattern="^inv_manage_add_"),
+                CallbackQueryHandler(handle_manage_delete_invoice, pattern="^inv_manage_delete_"),
+                CallbackQueryHandler(handle_manage_menu, pattern="^inv_manage_menu$"),
+            ],
+            InvoiceV2State.CONFIRM_DELETE: [
+                CallbackQueryHandler(handle_manage_confirm_delete, pattern="^inv_manage_confirm_delete_"),
+                CallbackQueryHandler(handle_manage_menu, pattern="^inv_manage_menu$"),
+            ],
+            InvoiceV2State.EDIT_INVOICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_edit_input),
+            ],
+            InvoiceV2State.EDIT_ITEM_SELECT: [
+                CallbackQueryHandler(handle_manage_item_action, pattern="^inv_manage_item_"),
+                CallbackQueryHandler(handle_manage_menu, pattern="^inv_manage_menu$"),
+            ],
+            InvoiceV2State.EDIT_ITEM_FIELD: [
+                CallbackQueryHandler(handle_manage_item_field, pattern="^inv_manage_field_"),
+                CallbackQueryHandler(handle_manage_item_field, pattern="^inv_manage_item_remove$"),
+                CallbackQueryHandler(handle_manage_items_menu, pattern="^inv_manage_items_"),
+            ],
+            InvoiceV2State.EDIT_ITEM_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_item_value),
+            ],
+            InvoiceV2State.ADD_ITEM_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_add_name),
+            ],
+            InvoiceV2State.ADD_ITEM_RATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_add_rate),
+            ],
+            InvoiceV2State.ADD_ITEM_QTY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_add_qty),
+            ],
+            InvoiceV2State.ADD_ITEM_DISCOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_add_discount),
+            ],
+            InvoiceV2State.ADD_ITEM_GST: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manage_add_gst),
+            ],
             InvoiceV2State.SEARCH_USER: [
                 CallbackQueryHandler(search_user_start, pattern="^inv2_create_start$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_search),

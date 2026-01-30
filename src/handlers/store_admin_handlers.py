@@ -35,7 +35,8 @@ async def cmd_store_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📋 View Orders", callback_data="store_admin_orders")],
         [InlineKeyboardButton("📦 Manage Products", callback_data="store_admin_products")],
         [InlineKeyboardButton("📊 Store Statistics", callback_data="store_admin_stats")],
-        [InlineKeyboardButton("❌ Close", callback_data="store_admin_close")]
+        [InlineKeyboardButton("❌ Close", callback_data="store_admin_close")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     
     await update.message.reply_text(
@@ -72,7 +73,8 @@ async def store_admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("🔓 View Open", callback_data="store_orders_filter:OPEN")],
         [InlineKeyboardButton("🔄 View Partial", callback_data="store_orders_filter:PARTIAL")],
         [InlineKeyboardButton("🔐 View Credit", callback_data="store_orders_filter:CREDIT")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="store_admin_menu")]
+        [InlineKeyboardButton("⬅️ Back", callback_data="store_admin_menu")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     
     await query.edit_message_text(

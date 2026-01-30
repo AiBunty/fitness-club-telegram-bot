@@ -118,16 +118,18 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
                     LIMIT 1
                 """
             else:
+                # Fallback: Should not reach here if schema detection works properly
+                # But if it does, use the serial/name schema
                 sql = """
                     SELECT 
-                        item_id,
-                        COALESCE(serial_no, item_id) AS serial_no,
-                        item_name,
+                        serial AS item_id,
+                        serial AS serial_no,
+                        name AS item_name,
                         mrp,
-                        gst_percent,
-                        COALESCE(is_active, 1) AS is_active
+                        gst AS gst_percent,
+                        1 AS is_active
                     FROM store_items
-                    WHERE COALESCE(serial_no, item_id) = %s
+                    WHERE serial = %s
                     LIMIT 1
                 """
 
@@ -168,34 +170,27 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
             """
             params = (like_pattern, search_term, f"{search_term}%", limit)
         else:
-            normalized_clause = "OR LOWER(COALESCE(normalized_item_name, '')) LIKE %s" if schema['has_normalized_name'] else ""
-            sql = f"""
+            # Schema not detected - use the serial/name schema (known to exist)
+            sql = """
                 SELECT 
-                    item_id,
-                    COALESCE(serial_no, item_id) AS serial_no,
-                    item_name,
+                    serial AS item_id,
+                    serial AS serial_no,
+                    name AS item_name,
                     mrp,
-                    gst_percent,
-                    COALESCE(is_active, 1) AS is_active
+                    gst AS gst_percent,
+                    1 AS is_active
                 FROM store_items
-                WHERE (
-                    LOWER(item_name) LIKE %s
-                    {normalized_clause}
-                )
-                AND (COALESCE(is_active, 1) = 1)
+                WHERE LOWER(name) LIKE %s
                 ORDER BY 
                     CASE 
-                        WHEN LOWER(item_name) = %s THEN 0
-                        WHEN LOWER(item_name) LIKE %s THEN 1
+                        WHEN LOWER(name) = %s THEN 0
+                        WHEN LOWER(name) LIKE %s THEN 1
                         ELSE 2
                     END,
-                    item_name ASC
+                    name ASC
                 LIMIT %s
             """
-            if schema['has_normalized_name']:
-                params = (like_pattern, like_pattern, search_term, f"{search_term}%", limit)
-            else:
-                params = (like_pattern, search_term, f"{search_term}%", limit)
+            params = (like_pattern, search_term, f"{search_term}%", limit)
 
         results = execute_query(sql, params, fetch_one=False)
 

@@ -42,6 +42,7 @@ async def cmd_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("🏢 Gym Name", callback_data="settings_gym_name")],
         [InlineKeyboardButton("🖼️ Upload QR Code", callback_data="settings_upload_qr")],
         [InlineKeyboardButton("❌ Close", callback_data="settings_close")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -214,8 +215,9 @@ async def callback_settings_close(update: Update, context: ContextTypes.DEFAULT_
     """Close settings menu"""
     query = update.callback_query
     await query.answer()
-    
-    await query.edit_message_text("✅ Settings menu closed.")
+
+    keyboard = [[InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")]]
+    await query.edit_message_text("✅ Settings menu closed.", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
 
