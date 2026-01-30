@@ -399,7 +399,7 @@ def get_ar_conversation_handler():
         },
         fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
         conversation_timeout=600,  # 10 minutes timeout to prevent stuck states
-        per_message=False,
+        per_message=False,  # REMOVE THIS LINE FOR RAILWAY/PRODUCTION
         per_chat=True,  # CRITICAL: Isolate per chat for 200+ users
         per_user=True   # CRITICAL: Isolate per user for admin concurrency
     )

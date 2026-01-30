@@ -270,7 +270,7 @@ async def callback_select_payment_method(update: Update, context: ContextTypes.D
             f"Payment Method: 💵 Cash\n\n"
             f"Your subscription request has been submitted.\n"
             f"Please contact the admin or visit the gym to complete the payment.\n"
-            f"You will be notified once approved. 🎉\n\n"
+            f"Your subscription will be activated shortly. 🎉\n\n"
             f"Questions? Reach out on WhatsApp or contact admin.",
             parse_mode="Markdown",
             reply_markup=reply_markup
@@ -898,37 +898,39 @@ async def cmd_my_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE
                         user_id,
                         'PAYMENT_REMINDER_1',
                         {
-                            'amount_due': balance,
-                            'due_in_hours': 48,
-                        },
-                        reminder_time,
+                            'name': request_details.get('user_name', ''),
+                            'amount': balance,
+                            'delay_hours': 48
+                        }
                     )
-
+                    logger.info(f"Payment reminder scheduled (48hr delay) for user {user_id}, balance {balance}")
+            
             # Notify user
-            try:
-                end_date_str = end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'
-                message = (
-                    f"✅ *Subscription Approved!*\n\n"
-                    f"Plan: {request_details.get('plan_id', 'N/A')}\n"
-                    f"Amount: Rs. {final_bill:,}\n"
-                    f"UPI Received: Rs. {upi_received:,}\n"
-                    f"Cash Received: Rs. {cash_received:,}\n"
-                    f"Balance: Rs. {balance:,}\n"
-                    f"Valid Until: {end_date_str}\n\n"
-                    f"Your subscription is now active! 🎉"
-                )
-                await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
-                logger.info(f"Approval notification sent to user {user_id}")
-            except Exception as e:
-                logger.debug(f"Could not send approval notification to user: {e}")
+            from src.database.user_operations import get_user
+            user = get_user(user_id)
+            if user and user.get('user_id'):
+                try:
+                    message = (
+                        f"✅ *Subscription Approved!*\n\n"
+                        f"Plan: {plan.get('name', 'Unknown')}\n"
+                        f"Amount: Rs. {final_bill:,.2f}\n"
+                        f"UPI Received: Rs. {upi_received:,.2f}\n"
+                        f"Cash Received: Rs. {cash_received:,.2f}\n"
+                        f"Balance: Rs. {balance:,.2f}\n"
+                        f"Valid Until: {end_date.strftime('%d %b %Y')}"
+                    )
+                    await context.bot.send_message(chat_id=user_id, text=message, parse_mode="Markdown")
+                    logger.info(f"Approval notification sent to user {user_id}")
+                except Exception as e:
+                    logger.debug(f"Could not send approval notification to user: {e}")
             
             # Update UI
             await query.edit_message_text(
                 f"✅ Subscription Approved!\n\n"
-                f"Final Bill: Rs. {final_bill:,}\n"
-                f"UPI Received: Rs. {upi_received:,}\n"
-                f"Cash Received: Rs. {cash_received:,}\n"
-                f"Balance: Rs. {balance:,}\n"
+                f"Final Bill: Rs. {final_bill:,.2f}\n"
+                f"UPI Received: Rs. {upi_received:,.2f}\n"
+                f"Cash Received: Rs. {cash_received:,.2f}\n"
+                f"Balance: Rs. {balance:,.2f}\n"
                 f"Valid Until: {end_date.strftime('%d-%m-%Y') if end_date else 'Not Set'}\n\n"
                 f"Reminders scheduled for outstanding balance."
             )
@@ -1337,7 +1339,7 @@ async def callback_admin_confirm_split_cash(update: Update, context: ContextType
                 try:
                     message = (
                         f"✅ *Split Payment - Cash Confirmed*\n\n"
-                        f"*Payment Complete!*\n"
+                        f"Payment Complete!*\n"
                         f"• 📱 UPI: Rs. {upi_amount:,.0f} ✅\n"
                         f"• 💵 Cash: Rs. {cash_amount:,.0f} ✅\n\n"
                         f"Status: PAID\n"
@@ -2244,7 +2246,7 @@ async def callback_approve_sub_standard(update: Update, context: ContextTypes.DE
                      f"Your payment has been received.\n\n"
                      f"💰 Amount: Rs. {sub['amount']:,}\n"
                      f"📅 Valid Until: {end_date.strftime('%d-%m-%Y')}\n\n"
-                     f"You now have full access to the app! 🎉\n\n"
+                     f"Your subscription is now active! 🎉\n\n"
                      f"Start tracking your fitness journey!",
                 parse_mode="Markdown"
             )
@@ -2444,7 +2446,7 @@ async def callback_select_end_date(update: Update, context: ContextTypes.DEFAULT
                 f"💰 Amount: Rs. {amount:,}\n"
                 f"📅 Valid Until: {end_date.strftime('%d-%m-%Y')}\n"
                 f"✓ Plan: {SUBSCRIPTION_PLANS.get(sub.get('plan_id', 1), {}).get('name', 'Standard')}\n\n"
-                f"🎉 You now have full access to all gym features!\n\n"
+                f"🎉 You now have full access to all gym features! 🎉\n\n"
                 "Thank you for your subscription! 🙏"
             )
             
@@ -2762,10 +2764,11 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
         f"Plan: {plan['name']}\n"
         f"Amount: Rs. {plan['amount']:,}\n"
         f"Payment Method: 📱 UPI\n"
-        f"Reference: {transaction_ref}\n\n"
-        f"Your payment has been submitted for verification.\n"
+        f"Reference: {transaction_ref}\n"
+        f"Screenshot: ✅ Attached\n\n"
+        f"Your payment has been verified.\n"
         f"Your subscription will be activated shortly. 🎉\n\n"
-        f"If you have any questions, reach out on WhatsApp.",
+        f"Thank you for joining our fitness club!",
         parse_mode="Markdown",
         reply_markup=reply_markup
     )
@@ -2787,7 +2790,7 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
             f"Reference: {transaction_ref}\n\n"
             f"Request ID: {request_id}\n"
             f"Submitted: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n"
-            f"Screenshot: ❌ Not attached\n\n"
+            f"Screenshot: ✅ Attached\n\n"
             f"*Action:* Please verify UPI payment and approve/reject below."
         )
         
@@ -2801,13 +2804,19 @@ async def callback_upi_skip_screenshot(update: Update, context: ContextTypes.DEF
         for admin_id in admin_ids:
             try:
                 await context.bot.send_message(chat_id=admin_id, text=admin_caption, reply_markup=admin_reply_markup, parse_mode="Markdown")
+                try:
+                    await context.bot.send_photo(chat_id=admin_id, photo=screenshot_file_id, caption="UPI Payment Screenshot")
+                except Exception as photo_error:
+                    logger.error(f"Could not send payment screenshot to admin {admin_id}: {photo_error}")
+                    # Fallback: send a text note so admin knows screenshot is missing
+                    await context.bot.send_message(chat_id=admin_id, text="⚠️ Unable to attach payment screenshot. Please request the user to resend.")
                 
                 # Send user profile picture if available
                 if profile_pic_url:
                     try:
                         await context.bot.send_photo(chat_id=admin_id, photo=profile_pic_url, caption="📸 User Profile Picture")
                     except Exception as profile_error:
-                        logger.debug(f"Could not send profile picture to admin {admin_id}: {profile_error}")
+                        logger.error(f"Could not send profile picture to admin {admin_id}: {profile_error}")
                 
                 logger.info(f"✅ UPI payment notification (no screenshot) sent to admin {admin_id}")
             except Exception as e:
@@ -2827,8 +2836,8 @@ async def callback_upi_submit_with_screenshot(update: Update, context: ContextTy
     user_id = query.from_user.id
     request_id = context.user_data.get('subscription_request_id')
     plan = context.user_data.get('selected_plan')
-    transaction_ref = context.user_data.get('transaction_ref')
-    screenshot_file_id = context.user_data.get('screenshot_file_id')
+    transaction_ref = context.user.data.get('transaction_ref')
+    screenshot_file_id = context.user.data.get('screenshot_file_id')
     
     if not request_id or not plan:
         await query.message.reply_text("❌ Payment data not found")

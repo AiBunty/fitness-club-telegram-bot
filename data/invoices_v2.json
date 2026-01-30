@@ -73,5 +73,157 @@
     "payment_status": "paid",
     "paid_at": "2026-01-27T17:19:55.159887",
     "verified_by": 9001
+  },
+  {
+    "user_id": 2147483647,
+    "user_name": "Sayali Sunil Wani (@sayaliwani09)",
+    "items": [
+      {
+        "name": "Herbalife Formula 1 Mango",
+        "rate": 1800.0,
+        "gst_percent": 18.0,
+        "serial": 2,
+        "quantity": 3,
+        "discount_percent": 20.0,
+        "base": 5400.0,
+        "discount_amount": 1080.0,
+        "taxable": 4320.0,
+        "gst_amount": 0,
+        "line_total": 4320.0
+      },
+      {
+        "name": "Afresh Energy Drink Ginger",
+        "rate": 750.0,
+        "gst_percent": 18.0,
+        "serial": 10,
+        "quantity": 1,
+        "discount_percent": 15.0,
+        "base": 750.0,
+        "discount_amount": 112.5,
+        "taxable": 637.5,
+        "gst_amount": 0,
+        "line_total": 637.5
+      },
+      {
+        "name": "Activated Fibre Tablets",
+        "rate": 1450.0,
+        "gst_percent": 18.0,
+        "serial": 18,
+        "quantity": 20,
+        "discount_percent": 25.0,
+        "base": 29000.0,
+        "discount_amount": 7250.0,
+        "taxable": 21750.0,
+        "gst_amount": 0,
+        "line_total": 21750.0
+      }
+    ],
+    "items_subtotal": 26707.5,
+    "shipping": 50.0,
+    "gst_total": 0,
+    "final_total": 26757.5,
+    "created_by": 424837855,
+    "date": "2026-01-28",
+    "invoice_id": "F5092E86",
+    "created_at": "2026-01-28T17:35:53.841466",
+    "paid_amount": 0,
+    "payment_lines": []
+  },
+  {
+    "user_id": 2147483647,
+    "user_name": "Sayali Sunil Wani (@sayaliwani09)",
+    "items": [
+      {
+        "name": "Herbalife Formula 1 Mango",
+        "rate": 1800.0,
+        "gst_percent": 18.0,
+        "serial": 2,
+        "quantity": 1,
+        "discount_percent": 15.0,
+        "base": 1800.0,
+        "discount_amount": 270.0,
+        "taxable": 1530.0,
+        "gst_amount": 0,
+        "line_total": 1530.0
+      },
+      {
+        "name": "Aloe Plus Concentrate Guava",
+        "rate": 1750.0,
+        "gst_percent": 18.0,
+        "serial": 15,
+        "quantity": 20,
+        "discount_percent": 40.0,
+        "base": 35000.0,
+        "discount_amount": 14000.0,
+        "taxable": 21000.0,
+        "gst_amount": 0,
+        "line_total": 21000.0
+      },
+      {
+        "name": "Aloe Plus Concentrate Lemon",
+        "rate": 1750.0,
+        "gst_percent": 18.0,
+        "serial": 16,
+        "quantity": 1,
+        "discount_percent": 25.0,
+        "base": 1750.0,
+        "discount_amount": 437.5,
+        "taxable": 1312.5,
+        "gst_amount": 0,
+        "line_total": 1312.5
+      }
+    ],
+    "items_subtotal": 23842.5,
+    "shipping": 50.0,
+    "gst_total": 0,
+    "final_total": 23892.5,
+    "created_by": 424837855,
+    "date": "2026-01-28",
+    "invoice_id": "A3F4CD63",
+    "created_at": "2026-01-28T17:47:43.140351",
+    "paid_amount": 0,
+    "payment_lines": []
+  },
+  {
+    "user_id": 2147483647,
+    "user_name": "Sayali Sunil Wani (@sayaliwani09)",
+    "items": [
+      {
+        "name": "Herbalife Formula 1 Kulfi",
+        "rate": 1850.0,
+        "gst_percent": 18.0,
+        "serial": 5,
+        "quantity": 1,
+        "discount_percent": 15.0,
+        "base": 1850.0,
+        "discount_amount": 277.5,
+        "taxable": 1572.5,
+        "gst_amount": 0,
+        "line_total": 1572.5
+      },
+      {
+        "name": "Protein Drink Mix Chocolate",
+        "rate": 2100.0,
+        "gst_percent": 18.0,
+        "serial": 8,
+        "quantity": 15,
+        "discount_percent": 25.0,
+        "base": 31500.0,
+        "discount_amount": 7875.0,
+        "taxable": 23625.0,
+        "gst_amount": 0,
+        "line_total": 23625.0
+      }
+    ],
+    "items_subtotal": 25197.5,
+    "shipping": 50.0,
+    "gst_total": 0,
+    "final_total": 25247.5,
+    "created_by": 424837855,
+    "date": "2026-01-28",
+    "invoice_id": "5095B0A5",
+    "created_at": "2026-01-28T18:10:50.769572",
+    "paid_amount": 0,
+    "payment_lines": []
   }
 ]

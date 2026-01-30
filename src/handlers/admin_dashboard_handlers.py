@@ -59,7 +59,8 @@ async def cmd_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
         [InlineKeyboardButton("👤 Manage Users", callback_data="admin_manage_users"),
          InlineKeyboardButton("📥 Excel Export", callback_data="admin_export_excel")],
-        [InlineKeyboardButton("🧾 Invoices", callback_data="cmd_invoices")],
+        [InlineKeyboardButton("🧾 Invoices", callback_data="cmd_invoices"),
+         InlineKeyboardButton("📋 Invoice Reports", callback_data="cmd_invoice_reports")],
         [InlineKeyboardButton("💰 Revenue Stats", callback_data="dashboard_revenue"),
          InlineKeyboardButton("📈 Engagement", callback_data="dashboard_engagement")],
         [InlineKeyboardButton("✏️ Message Templates", callback_data="admin_templates")]

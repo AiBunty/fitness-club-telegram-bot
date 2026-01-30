@@ -262,7 +262,6 @@ def main(start: bool = False):
         get_subscription_conversation_handler, get_admin_approval_conversation_handler,
         callback_admin_reject_upi, callback_admin_reject_cash
     )
-    from src.invoices.handlers import get_invoice_conversation_handler
     from src.handlers.ar_handlers import (
         get_ar_conversation_handler, ar_export_overdue, ar_credit_summary,
         ar_reports_menu, ar_report_dispatch
@@ -271,6 +270,9 @@ def main(start: bool = False):
         cmd_admin_settings, get_admin_settings_handler
     )
     from src.handlers.admin_welcome_handlers import get_welcome_message_admin_handler
+    from src.handlers.invoice_report_handlers import (
+        cmd_invoice_reports, get_invoice_report_conversation_handler, get_invoice_report_callbacks
+    )
     from src.handlers.reminder_settings_handlers import (
         cmd_reminders, get_reminder_conversation_handler
     )
@@ -595,6 +597,12 @@ def main(start: bool = False):
     application.add_handler(CallbackQueryHandler(callback_report_today, pattern="^report_today$"))
     application.add_handler(CallbackQueryHandler(callback_report_top_performers, pattern="^report_top_performers$"))
     application.add_handler(CallbackQueryHandler(callback_report_inactive_users, pattern="^report_inactive_users$"))
+    
+    # Invoice Report handlers (AFTER general reports)
+    logger.info("[BOT] Registering Invoice Report handlers")
+    application.add_handler(get_invoice_report_conversation_handler())
+    for handler in get_invoice_report_callbacks():
+        application.add_handler(handler)
     application.add_handler(CallbackQueryHandler(callback_report_eod, pattern="^report_eod$"))
     application.add_handler(CallbackQueryHandler(callback_export_active, pattern="^export_active$"))
     application.add_handler(CallbackQueryHandler(callback_export_inactive, pattern="^export_inactive$"))

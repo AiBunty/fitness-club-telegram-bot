@@ -70,7 +70,7 @@ def search_delete_user_db_only(query: str, limit: int = 10) -> List[Dict]:
                     COALESCE(username, '') as username,
                     is_banned
                 FROM users
-                WHERE user_id = %s::BIGINT
+                WHERE user_id = %s
                 LIMIT 1
             """
             results = execute_query(sql, (query,), fetch_one=False)

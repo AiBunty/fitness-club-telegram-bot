@@ -4,13 +4,13 @@
     "time": "23:55:00",
     "tz": null,
     "callback": "send_eod_report",
-    "updated_at": "2026-01-27T16:12:35.330558"
+    "updated_at": "2026-01-28T17:10:02.759472"
   },
   "admin_daily_report": {
     "name": "admin_daily_report",
     "time": "08:00:00",
     "tz": "Asia/Kolkata",
     "callback": "send_admin_daily_report",
-    "updated_at": "2026-01-27T16:12:35.346704"
+    "updated_at": "2026-01-28T17:10:02.794188"
   }
 }

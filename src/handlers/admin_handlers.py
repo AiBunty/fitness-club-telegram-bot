@@ -29,6 +29,15 @@ def get_admin_ids() -> list:
     return []
 
 
+def get_admin_users() -> list:
+    """Get list of admin user records (single source of truth)"""
+    try:
+        return list_admins() or []
+    except Exception as e:
+        logger.error(f"Error getting admin users: {e}")
+        return []
+
+
 async def cmd_pending_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show pending attendance requests for admin"""
     if not is_admin_id(update.effective_user.id):

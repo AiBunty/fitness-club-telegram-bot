@@ -69,7 +69,7 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
                     gst_percent,
                     is_active
                 FROM store_items
-                WHERE serial_no = %s::INT
+                WHERE serial_no = %s
                 LIMIT 1
             """
             results = execute_query(sql, (query,), fetch_one=False)
@@ -98,9 +98,11 @@ def search_store_items_db_only(query: str, limit: int = 20) -> List[Dict]:
                 is_active
             FROM store_items
             WHERE 
-                LOWER(item_name) LIKE %s
-                OR LOWER(COALESCE(normalized_item_name, '')) LIKE %s
-            AND is_active = TRUE
+                (
+                    LOWER(item_name) LIKE %s
+                    OR LOWER(COALESCE(normalized_item_name, '')) LIKE %s
+                )
+                AND (is_active = TRUE OR is_active = 1 OR is_active IS NULL)
             ORDER BY 
                 CASE 
                     WHEN LOWER(item_name) = %s THEN 0

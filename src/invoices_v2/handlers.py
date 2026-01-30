@@ -15,7 +15,11 @@ from telegram.ext import (
 )
 
 from src.invoices_v2.state import InvoiceV2State
-from src.invoices_v2.store import search_item, load_items
+from src.invoices_v2.search_items_db_only import (
+    search_store_items_db_only,
+    format_item_for_display,
+    get_item_details_for_invoice
+)
 from src.invoices_v2.utils import search_users, get_gst_config, calculate_gst, format_user_display
 from src.database.ar_operations import (
     create_receivable,
@@ -24,6 +28,7 @@ from src.database.ar_operations import (
     update_receivable_status,
 )
 from src.utils.auth import is_admin
+from src.handlers.admin_handlers import get_admin_users
 from src.utils.flow_manager import (
     set_active_flow, clear_active_flow, check_flow_ownership,
     FLOW_INVOICE_V2_CREATE
@@ -285,7 +290,7 @@ async def handle_store_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"[INVOICE_V2] store_search_query query={query}")
     
-    results = search_item(query)
+    results = search_store_items_db_only(query)
     
     if not results:
         await update.effective_user.send_message("❌ No items found. Try again:")
@@ -296,8 +301,8 @@ async def handle_store_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     kb_buttons = []
     for i, item in enumerate(results):
-        serial = item.get("serial")
-        name = item.get("name")
+        serial = item.get("serial_no")
+        name = item.get("item_name")
         mrp = item.get("mrp")
         gst = item.get("gst_percent")
         
@@ -336,17 +341,19 @@ async def handle_store_select(update: Update, context: ContextTypes.DEFAULT_TYPE
         return InvoiceV2State.SELECT_STORE_ITEM
     
     # Auto-fill item data
+    item_details = get_item_details_for_invoice(selected_item)
     context.user_data["invoice_v2_current_item"] = {
-        "name": selected_item.get("name"),
-        "rate": selected_item.get("mrp"),
-        "gst_percent": selected_item.get("gst_percent"),
-        "serial": selected_item.get("serial")
+        "name": item_details.get("item_name"),
+        "rate": item_details.get("mrp"),
+        "gst_percent": item_details.get("gst_percent"),
+        "serial": selected_item.get("serial_no"),
+        "store_item_id": item_details.get("store_item_id")
     }
     
-    logger.info(f"[INVOICE_V2] store_item_selected serial={selected_item.get('serial')}")
+    logger.info(f"[INVOICE_V2] store_item_selected serial={selected_item.get('serial_no')}")
     
     # Ask for quantity
-    text = f"📦 Item: *{selected_item.get('name')}*\nRate: ₹{selected_item.get('mrp')}\n\nEnter *Quantity*:"
+    text = f"📦 Item: *{selected_item.get('item_name')}*\nRate: ₹{selected_item.get('mrp')}\n\nEnter *Quantity*:"
     await query.edit_message_text(text, parse_mode="Markdown")
     
     return InvoiceV2State.ITEM_QUANTITY
@@ -652,6 +659,7 @@ Actions:
         [InlineKeyboardButton("❌ Reject Bill", callback_data=f"inv2_reject_{invoice_id}")]
     ])
     
+    user_send_error = None
     try:
         await context.bot.send_document(
             chat_id=user_id,
@@ -662,37 +670,47 @@ Actions:
         )
         logger.info(f"[INVOICE_V2] invoice_sent_to_user invoice_id={invoice_id} user_id={user_id}")
     except Exception as e:
+        user_send_error = str(e)
         logger.error(f"[INVOICE_V2] failed_to_send_to_user invoice_id={invoice_id} error={e}")
-        await query.edit_message_text(f"❌ Failed to send invoice to user: {e}")
-        return ConversationHandler.END
     
     # Send copy to admin(s)
-    admin_text = f"📄 Invoice {invoice_id} generated for {user_name}\nAmount: ₹{invoice_data['final_total']}"
+    admin_text = (
+        f"📄 Invoice {invoice_id} generated for {user_name}\n"
+        f"Amount: ₹{invoice_data['final_total']}\n"
+        f"User delivery: {'✅ Sent' if not user_send_error else '❌ Failed'}"
+    )
     
     admin_kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑️ Delete Invoice", callback_data=f"inv2_delete_{invoice_id}")],
         [InlineKeyboardButton("🔁 Resend to User", callback_data=f"inv2_resend_{invoice_id}")]
     ])
     
-    # Reset PDF buffer
-    pdf_buffer.seek(0)
-    
-    try:
-        # Get admin user IDs from database or config
-        # For now, just send to current admin
-        await context.bot.send_document(
-            chat_id=admin_id,
-            document=InputFile(pdf_buffer, filename=f"invoice_{invoice_id}.pdf"),
-            caption=admin_text,
-            reply_markup=admin_kb,
-            parse_mode="Markdown"
-        )
-        logger.info(f"[INVOICE_V2] invoice_sent_to_admin invoice_id={invoice_id} admin_id={admin_id}")
-    except Exception as e:
-        logger.error(f"[INVOICE_V2] failed_to_send_to_admin invoice_id={invoice_id} error={e}")
+    admin_users = get_admin_users()
+    admin_ids = [a.get("user_id") for a in admin_users if a.get("user_id")]
+    if admin_id not in admin_ids:
+        admin_ids.append(admin_id)
+
+    for aid in admin_ids:
+        try:
+            pdf_buffer.seek(0)
+            await context.bot.send_document(
+                chat_id=aid,
+                document=InputFile(pdf_buffer, filename=f"invoice_{invoice_id}.pdf"),
+                caption=admin_text,
+                reply_markup=admin_kb,
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] invoice_sent_to_admin invoice_id={invoice_id} admin_id={aid}")
+        except Exception as e:
+            logger.error(f"[INVOICE_V2] failed_to_send_to_admin invoice_id={invoice_id} admin_id={aid} error={e}")
     
     # Confirm to admin
-    await query.edit_message_text(f"✅ Invoice {invoice_id} sent to user and admin!")
+    if user_send_error:
+        await query.edit_message_text(
+            f"⚠️ Invoice {invoice_id} created, but failed to send to user. Admins received a copy.\nError: {user_send_error}"
+        )
+    else:
+        await query.edit_message_text(f"✅ Invoice {invoice_id} sent to user and all admins!")
     
     # CRITICAL: Clear invoice flow lock on successful completion
     clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)

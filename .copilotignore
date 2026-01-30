@@ -1,0 +1,26 @@
+# Copilot Ignore File
+# These files will be excluded from Copilot's context
+
+# Log files
+*.log
+logs/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Large documentation files
+*.md
+
+# Data directories
+data/
+
+# Migration scripts (historical)
+migrate_*.py
+
+# Test output
+.pytest_cache/
+
+# Git directory
+.git/

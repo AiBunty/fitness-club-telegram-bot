@@ -375,24 +375,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # Menu button callbacks (cmd_* prefix)
     elif query.data == "cmd_notifications":
         await cmd_notifications(update, context)
-    elif query.data == "cmd_invoices":
-        if not await verify_admin_access(update, context):
-            return
-        from src.invoices.handlers import invoice_entry
-        await invoice_entry(update, context)
-    elif query.data.startswith('inv_admin_resend_'):
-        if not await verify_admin_access(update, context):
-            return
-        from src.invoices.handlers import admin_resend_invoice
-        await admin_resend_invoice(update, context)
-    elif query.data.startswith('inv_admin_delete_'):
-        if not await verify_admin_access(update, context):
-            return
-        from src.invoices.handlers import admin_delete_invoice
-        await admin_delete_invoice(update, context)
-    elif query.data.startswith('inv_paid_'):
-        from src.invoices.handlers import invoice_payment_approved_hook
-        await invoice_payment_approved_hook(update, context)
     elif query.data == "cmd_challenges":
         await cmd_challenges(update, context)
     elif query.data == "cmd_my_challenges":
