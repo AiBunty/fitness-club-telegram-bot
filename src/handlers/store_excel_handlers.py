@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from src.database.store_operations import create_or_update_product
+from src.database.store_items_operations import add_or_update_item_in_db
 from src.utils.auth import is_admin_id
 
 logger = logging.getLogger(__name__)
@@ -47,20 +47,16 @@ async def cmd_store_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     text = (
-        "📊 *Store Excel Upload*\n\n"
+        "📊 *Store Items Excel Upload*\n\n"
         "Send an Excel file with these columns:\n"
-        "1. product_code (unique)\n"
-        "2. category\n"
-        "3. product_name\n"
-        "4. description\n"
-        "5. price\n"
-        "6. discount_percent\n"
-        "7. stock_quantity\n"
-        "8. status (ACTIVE/INACTIVE)\n\n"
+        "1. item_name\n"
+        "2. hsn\n"
+        "3. mrp\n"
+        "4. gst_percent\n\n"
         "Rules:\n"
-        "• product_code is unique key\n"
-        "• If product_code exists → UPDATE\n"
-        "• If product_code new → CREATE\n"
+        "• Item Name + HSN is unique key\n"
+        "• If name+hsn exists → UPDATE\n"
+        "• If new → CREATE\n"
         "• Upload is idempotent\n\n"
         "📥 Upload your Excel file:"
     )
@@ -105,14 +101,10 @@ async def handle_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Expected columns
         expected_columns = {
-            1: 'product_code',
-            2: 'category',
-            3: 'product_name',
-            4: 'description',
-            5: 'price',
-            6: 'discount_percent',
-            7: 'stock_quantity',
-            8: 'status'
+            1: 'item_name',
+            2: 'hsn',
+            3: 'mrp',
+            4: 'gst_percent'
         }
         
         # Read header
@@ -137,46 +129,33 @@ async def handle_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         for row_num, row in enumerate(sheet.iter_rows(min_row=2, values_only=False), start=2):
             try:
-                product_code = row[0].value
-                category = row[1].value
-                product_name = row[2].value
-                description = row[3].value
-                price = row[4].value
-                discount_percent = row[5].value
-                stock_quantity = row[6].value
-                status = row[7].value
+                item_name = row[0].value
+                hsn = row[1].value
+                mrp = row[2].value
+                gst_percent = row[3].value
                 
                 # Validate required fields
-                if not product_code or not category or not product_name or price is None:
+                if not item_name or not hsn or mrp is None:
                     errors.append(f"Row {row_num}: Missing required fields")
                     error_count += 1
                     continue
                 
                 # Type conversions
                 try:
-                    price = float(price)
-                    discount_percent = float(discount_percent or 0)
-                    stock_quantity = int(stock_quantity or 0)
-                    status = (status or 'ACTIVE').upper()
-                    
-                    if status not in ['ACTIVE', 'INACTIVE']:
-                        status = 'ACTIVE'
+                    mrp = float(mrp)
+                    gst_percent = float(gst_percent or 18)
                 except ValueError as e:
                     errors.append(f"Row {row_num}: Invalid data type - {str(e)}")
                     error_count += 1
                     continue
                 
                 # Create/update product
-                result = create_or_update_product(
-                    product_code=str(product_code).strip(),
-                    category=str(category).strip(),
-                    name=str(product_name).strip(),
-                    description=str(description or "").strip(),
-                    price=price,
-                    discount_percent=discount_percent,
-                    stock=stock_quantity,
-                    status=status
-                )
+                result = add_or_update_item_in_db({
+                    'name': str(item_name).strip(),
+                    'hsn': str(hsn).strip(),
+                    'mrp': mrp,
+                    'gst': gst_percent
+                })
                 
                 if result:
                     success_count += 1
@@ -226,14 +205,14 @@ async def excel_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet.title = "Products"
         
         # Header
-        headers = ['product_code', 'category', 'product_name', 'description', 'price', 'discount_percent', 'stock_quantity', 'status']
+        headers = ['item_name', 'hsn', 'mrp', 'gst_percent']
         sheet.append(headers)
         
         # Sample data
         samples = [
-            ['PROTEIN001', 'Supplements', 'Whey Protein 1kg', 'Premium whey protein powder', 1500, 10, 50, 'ACTIVE'],
-            ['CREATINE001', 'Supplements', 'Creatine Monohydrate', '100% pure creatine', 800, 5, 30, 'ACTIVE'],
-            ['TOWEL001', 'Accessories', 'Gym Towel', 'Microfiber gym towel', 300, 0, 100, 'ACTIVE'],
+            ['Formula 1 Shake', '2106', 1500, 18],
+            ['Aloe Concentrate', '2202', 1750, 18],
+            ['Afresh Energy Drink', '2106', 750, 18],
         ]
         
         for sample in samples:
@@ -249,8 +228,8 @@ async def excel_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_document(
             chat_id=query.from_user.id,
             document=excel_file,
-            filename="store_products_sample.xlsx",
-            caption="📊 Sample template for bulk product upload"
+            filename="store_items_sample.xlsx",
+            caption="📊 Sample template for bulk item upload"
         )
         
     except Exception as e:

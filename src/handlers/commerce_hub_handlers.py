@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import openpyxl
 
 from src.database.connection import execute_query
+from src.database.store_items_operations import add_or_update_item_in_db
 from src.database.ar_operations import create_receivable, create_transactions, update_receivable_status
 from src.utils.excel_templates import generate_store_product_template, generate_subscription_plan_template
 from src.utils.auth import is_admin_id
@@ -198,15 +199,14 @@ async def download_store_template(update: Update, context: ContextTypes.DEFAULT_
         if template_file:
             await query.message.reply_document(
                 document=template_file,
-                filename=f"Store_Products_Template_{date.today()}.xlsx",
-                caption="📥 *Store Products Template*\n\n"
-                        "Fill in your products and upload via 'Bulk Upload Products'.\n\n"
-                        "Columns:\n"
-                        "• Product Name\n"
-                        "• Description\n"
-                        "• MRP (Maximum Retail Price)\n"
-                        "• Percentage Discount (0-100)\n"
-                        "• Final Price (auto-calculated)",
+                filename=f"Store_Items_Template_{date.today()}.xlsx",
+                caption="📥 *Store Items Template*\n\n"
+                    "Fill in your items and upload via 'Bulk Upload Products'.\n\n"
+                    "Columns:\n"
+                    "• Item Name\n"
+                    "• HSN\n"
+                    "• MRP (Maximum Retail Price)\n"
+                    "• GST %",
                 parse_mode='Markdown'
             )
         else:
@@ -252,31 +252,27 @@ async def process_product_upload(update: Update, context: ContextTypes.DEFAULT_T
             if not row[0]:  # Skip empty rows
                 continue
             
-            name, description, mrp, discount_percent, final_price = row[:5]
+            name, hsn, mrp, gst_percent = row[:4]
             
-            if not name or not mrp:
-                await update.message.reply_text(f"❌ Row {row_idx}: Missing Product Name or MRP")
+            if not name or not hsn or not mrp:
+                await update.message.reply_text(f"❌ Row {row_idx}: Missing Item Name, HSN or MRP")
                 return UPLOAD_PRODUCTS
             
             # Validate numeric values
             try:
                 mrp = float(mrp)
-                discount_percent = float(discount_percent or 0)
-                
-                # Calculate final price
-                calculated_final_price = round(mrp * (1 - discount_percent / 100), 2)
+                gst_percent = float(gst_percent or 18)
             except ValueError:
                 await update.message.reply_text(
-                    f"❌ Row {row_idx}: MRP and Discount must be numeric"
+                    f"❌ Row {row_idx}: MRP and GST must be numeric"
                 )
                 return UPLOAD_PRODUCTS
             
             products_data.append({
                 'name': str(name).strip(),
-                'description': str(description or '').strip(),
+                'hsn': str(hsn).strip(),
                 'mrp': mrp,
-                'discount_percent': discount_percent,
-                'final_price': calculated_final_price
+                'gst': gst_percent
             })
             rows_count += 1
         
@@ -288,41 +284,28 @@ async def process_product_upload(update: Update, context: ContextTypes.DEFAULT_T
         inserted = 0
         for product in products_data:
             try:
-                query = """
-                    INSERT INTO store_products 
-                    (category, name, description, mrp, discount_percent, final_price, created_by, ar_enabled)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE)
-                    RETURNING product_id
-                """
-                result = execute_query(
-                    query,
-                    ('General', product['name'], product['description'], 
-                     product['mrp'], product['discount_percent'], 
-                     product['final_price'], admin_id),
-                    fetch_one=True
-                )
+                result = add_or_update_item_in_db(product)
                 if result:
                     inserted += 1
             except Exception as e:
                 logger.warning(f"Failed to insert product {product['name']}: {e}")
         
         # Log bulk audit entry
-        log_audit(admin_id, 'store_products', None, 'bulk_upload',
+        log_audit(admin_id, 'store_items', None, 'bulk_upload',
                   old_value=None,
                   new_value={'count': inserted, 'products': [p['name'] for p in products_data[:5]]})
         
         await update.message.reply_text(
             f"✅ *Bulk Upload Complete!*\n\n"
-            f"📦 Products Uploaded: {inserted}/{rows_count}\n\n"
-            f"Products are set with ar_enabled=FALSE by default.\n"
-            f"Edit individual products to enable AR if needed.",
+            f"📦 Items Uploaded: {inserted}/{rows_count}\n\n"
+            f"Store items are now available for invoices and store browsing.",
             parse_mode='Markdown'
         )
         
         # Notify admins
         await notify_admins(
             context,
-            f"🛒 Bulk upload: {inserted} store products added",
+            f"🛒 Bulk upload: {inserted} store items added",
             admin_id
         )
         
@@ -404,36 +387,27 @@ async def handle_commerce_callbacks(update: Update, context: ContextTypes.DEFAUL
     if query.data == "store_download_template":
         await download_store_template(update, context)
     elif query.data == "store_list":
-        await list_store_products(update, context)
+        await list_store_items(update, context)
     elif query.data == "sub_list":
         await list_subscription_plans(update, context)
 
 
-async def list_store_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all store products"""
+async def list_store_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all store items"""
     try:
         products = execute_query(
-            "SELECT * FROM store_products WHERE status='active' ORDER BY category, name"
+            "SELECT serial, name, hsn, mrp, gst FROM store_items ORDER BY name"
         )
         
         if not products:
             await update.callback_query.message.reply_text("No products found.")
             return
         
-        text = "🛒 *Active Store Products:*\n\n"
-        current_category = None
-        
+        text = "🛒 *Active Store Items:*\n\n"
         for product in products:
-            if product['category'] != current_category:
-                current_category = product['category']
-                text += f"\n**{current_category}**\n"
-            
-            ar_icon = "📊" if product['ar_enabled'] else "❌"
-            discount_str = f" (-{product['discount_percent']}%)" if product['discount_percent'] > 0 else ""
             text += (
                 f"  • {product['name']}\n"
-                f"    MRP: Rs {product['mrp']}{discount_str} → **Rs {product['final_price']}**\n"
-                f"    Stock: {product['stock']} | AR: {ar_icon}\n"
+                f"    HSN: {product['hsn']} | MRP: Rs {product['mrp']} | GST: {product['gst']}%\n"
             )
         
         await update.callback_query.message.reply_text(text, parse_mode='Markdown')
@@ -465,28 +439,19 @@ async def cmd_user_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         products = execute_query(
-            "SELECT * FROM store_products WHERE status='active' ORDER BY category, name"
+            "SELECT serial, name, hsn, mrp, gst FROM store_items ORDER BY name"
         )
         
         if not products:
             await message.reply_text("🛒 *Store*\n\nNo products available at the moment. Check back soon!", parse_mode='Markdown')
             return
         
-        text = "🛒 *Store Products*\n\n"
-        current_category = None
-        
+        text = "🛒 *Store Items*\n\n"
         for product in products:
-            if product['category'] != current_category:
-                current_category = product['category']
-                text += f"\n*{current_category}*\n"
-            
-            discount_str = f" (-{product['discount_percent']}%)" if product['discount_percent'] > 0 else ""
-            stock_text = f"✅ In Stock ({product['stock']})" if product['stock'] > 0 else "❌ Out of Stock"
             text += (
                 f"• *{product['name']}*\n"
-                f"  {product['description'] or 'No description'}\n"
-                f"  Price: ~~Rs {product['mrp']}~~ → *Rs {product['final_price']}*{discount_str}\n"
-                f"  {stock_text}\n\n"
+                f"  HSN: {product['hsn']}\n"
+                f"  MRP: Rs {product['mrp']} | GST: {product['gst']}%\n\n"
             )
         
         text += "\n💬 Contact admin to purchase products."

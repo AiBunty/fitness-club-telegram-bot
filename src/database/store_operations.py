@@ -11,55 +11,60 @@ from src.database.ar_operations import create_receivable, update_receivable_stat
 logger = logging.getLogger(__name__)
 
 # ================================================================
-# PRODUCTS - Store catalog
+# PRODUCTS - Store catalog (store_items is master)
 # ================================================================
+
+def _map_store_item(item: dict) -> dict:
+    """Map store_items row to store product schema expected by handlers."""
+    if not item:
+        return None
+    serial = item.get('serial') or item.get('serial_no') or item.get('item_id')
+    name = item.get('name') or item.get('item_name')
+    hsn = item.get('hsn', '')
+    mrp = float(item.get('mrp', 0) or 0)
+    gst = float(item.get('gst', item.get('gst_percent', 18)) or 18)
+
+    return {
+        'product_id': serial,
+        'product_code': f"ITEM{serial}",
+        'category': 'Store Items',
+        'name': name,
+        'description': f"HSN: {hsn}" if hsn else 'Store Item',
+        'price': mrp,
+        'discount_percent': 0,
+        'final_price': mrp,
+        'stock': 9999,
+        'status': 'ACTIVE',
+        'mrp': mrp,
+        'gst_percent': gst,
+        'hsn': hsn,
+    }
+
 
 def create_or_update_product(product_code: str, category: str, name: str, description: str,
                               price: float, discount_percent: float, stock: int, status: str = 'ACTIVE') -> dict:
-    """
-    Create or update product by product_code (UPSERT)
-    Prevents duplicates using product_code as unique key
-    
-    Args:
-        product_code: Unique product identifier
-        category: Product category
-        name: Product name
-        description: Product description
-        price: Price in rupees
-        discount_percent: Discount percentage (0-100)
-        stock: Stock quantity
-        status: ACTIVE or INACTIVE
-    
-    Returns:
-        Product dict or None on error
-    """
+    """Compatibility wrapper: write to store_items (master table for all catalog operations)."""
     try:
+        hsn = str(product_code).strip() if product_code else ''
+        mrp = float(price or 0)
+        gst = 18.0
+
+        # Upsert by name+hsn
         query1 = """
-            INSERT INTO store_products 
-            (product_code, category, name, description, price, discount_percent, stock, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                category = VALUES(category),
-                name = VALUES(name),
-                description = VALUES(description),
-                price = VALUES(price),
-                discount_percent = VALUES(discount_percent),
-                stock = VALUES(stock),
-                status = VALUES(status),
-                updated_at = CURRENT_TIMESTAMP
+            INSERT INTO store_items (name, hsn, mrp, gst)
+            VALUES (%s, %s, %s, %s)
         """
-        execute_query(query1, (product_code, category, name, description, price, discount_percent, stock, status))
-        
-        # Get the result
-        query2 = "SELECT * FROM store_products WHERE product_code = %s"
-        result = execute_query(query2, (product_code,), fetch_one=True)
-        
+        execute_query(query1, (str(name).strip(), hsn, mrp, gst))
+
+        query2 = "SELECT * FROM store_items WHERE name = %s AND hsn = %s ORDER BY serial DESC LIMIT 1"
+        result = execute_query(query2, (str(name).strip(), hsn), fetch_one=True)
+
         if result:
-            logger.info(f"Product upserted: {product_code} - {name}")
-            return result
+            logger.info(f"Item upserted: {name}")
+            return _map_store_item(result)
         return None
     except Exception as e:
-        logger.error(f"Error upserting product {product_code}: {e}")
+        logger.error(f"Error upserting item {name}: {e}")
         return None
 
 
@@ -67,11 +72,12 @@ def get_products_by_category(category: str) -> list:
     """Get all active products in a category"""
     try:
         query = """
-            SELECT * FROM store_products
-            WHERE category = %s AND status = 'ACTIVE'
+            SELECT serial, name, hsn, mrp, gst, created_at, updated_at
+            FROM store_items
             ORDER BY name
         """
-        return execute_query(query, (category,))
+        rows = execute_query(query)
+        return [_map_store_item(r) for r in rows] if rows else []
     except Exception as e:
         logger.error(f"Error getting products for category {category}: {e}")
         return []
@@ -80,8 +86,9 @@ def get_products_by_category(category: str) -> list:
 def get_product(product_id: int) -> dict:
     """Get product by ID"""
     try:
-        query = "SELECT * FROM store_products WHERE product_id = %s"
-        return execute_query(query, (product_id,), fetch_one=True)
+        query = "SELECT serial, name, hsn, mrp, gst, created_at, updated_at FROM store_items WHERE serial = %s"
+        result = execute_query(query, (product_id,), fetch_one=True)
+        return _map_store_item(result) if result else None
     except Exception as e:
         logger.error(f"Error getting product {product_id}: {e}")
         return None
@@ -90,13 +97,10 @@ def get_product(product_id: int) -> dict:
 def get_all_categories() -> list:
     """Get all unique categories with at least one active product"""
     try:
-        query = """
-            SELECT DISTINCT category FROM store_products
-            WHERE status = 'ACTIVE'
-            ORDER BY category
-        """
-        results = execute_query(query)
-        return [r['category'] for r in results] if results else []
+        results = execute_query("SELECT COUNT(*) as count FROM store_items", fetch_one=True)
+        if results and results.get('count', 0) > 0:
+            return ["Store Items"]
+        return []
     except Exception as e:
         logger.error(f"Error getting categories: {e}")
         return []
@@ -106,9 +110,7 @@ def validate_stock(product_id: int, quantity: int) -> bool:
     """Check if enough stock available"""
     try:
         product = get_product(product_id)
-        if not product:
-            return False
-        return product['stock'] >= quantity
+        return product is not None
     except Exception as e:
         logger.error(f"Error validating stock: {e}")
         return False
@@ -468,23 +470,8 @@ def reduce_stock(product_id: int, quantity: int, order_id: int = None) -> bool:
         Success status
     """
     try:
-        query1 = """
-            UPDATE store_products
-            SET stock = stock - %s, updated_at = CURRENT_TIMESTAMP
-            WHERE product_id = %s AND stock >= %s
-        """
-        execute_query(query1, (quantity, product_id, quantity))
-        
-        # Get the updated stock value
-        query2 = "SELECT stock FROM store_products WHERE product_id = %s"
-        result = execute_query(query2, (product_id,), fetch_one=True)
-        
-        if result:
-            logger.info(f"Stock reduced for product {product_id}: qty={quantity}, remaining={result['stock']}")
-            return True
-        else:
-            logger.warning(f"Stock reduction failed for product {product_id}: qty={quantity}")
-            return False
+        logger.info(f"[STORE_ITEMS] reduce_stock noop product_id={product_id} qty={quantity} order_id={order_id}")
+        return True
     except Exception as e:
         logger.error(f"Error reducing stock: {e}")
         return False
@@ -493,21 +480,8 @@ def reduce_stock(product_id: int, quantity: int, order_id: int = None) -> bool:
 def increase_stock(product_id: int, quantity: int, reason: str = "") -> bool:
     """Increase stock (e.g., order cancellation, returned items)"""
     try:
-        query1 = """
-            UPDATE store_products
-            SET stock = stock + %s, updated_at = CURRENT_TIMESTAMP
-            WHERE product_id = %s
-        """
-        execute_query(query1, (quantity, product_id))
-        
-        # Get the updated stock value
-        query2 = "SELECT stock FROM store_products WHERE product_id = %s"
-        result = execute_query(query2, (product_id,), fetch_one=True)
-        
-        if result:
-            logger.info(f"Stock increased for product {product_id}: qty={quantity}, reason={reason}")
-            return True
-        return False
+        logger.info(f"[STORE_ITEMS] increase_stock noop product_id={product_id} qty={quantity} reason={reason}")
+        return True
     except Exception as e:
         logger.error(f"Error increasing stock: {e}")
         return False

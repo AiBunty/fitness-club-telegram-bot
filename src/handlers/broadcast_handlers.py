@@ -496,9 +496,9 @@ async def broadcast_new_subscription_plan(context: ContextTypes.DEFAULT_TYPE, pl
         logger.error(f"Error broadcasting new plan: {e}")
 
 
-async def broadcast_new_store_products(context: ContextTypes.DEFAULT_TYPE, product_count: int, 
-                                       sample_products: list):
-    """Broadcast new store products to all members"""
+async def broadcast_new_store_items(context: ContextTypes.DEFAULT_TYPE, product_count: int, 
+                                    sample_products: list):
+    """Broadcast new store items to all members"""
     try:
         users = execute_query("""
             SELECT user_id FROM users 

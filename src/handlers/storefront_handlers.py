@@ -228,26 +228,35 @@ async def cmd_browse_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     try:
-        categories = execute_query("""
-            SELECT DISTINCT category FROM store_products
-            WHERE status = 'active'
-            ORDER BY category
+        items = execute_query("""
+            SELECT serial, name, hsn, mrp, gst
+            FROM store_items
+            ORDER BY name
         """)
-        
-        if not categories:
-            await message.reply_text("📭 No products available.")
+
+        if not items:
+            await message.reply_text("📭 No items available.")
             return ConversationHandler.END
-        
+
+        text = "🛒 *Store Items*\n\n"
         keyboard = []
-        for cat in categories:
+        for item in items:
+            text += (
+                f"**{item['name']}**\n"
+                f"HSN: {item['hsn']}\n"
+                f"MRP: Rs {item['mrp']} | GST: {item['gst']}%\n\n"
+            )
             keyboard.append([
-                InlineKeyboardButton(f"📦 {cat['category']}", callback_data=f"store_cat_{cat['category']}")
+                InlineKeyboardButton(
+                    f"Add to Cart - Rs {item['mrp']}",
+                    callback_data=f"add_product_{item['serial']}"
+                )
             ])
-        
+
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="main_menu")])
-        
+
         await message.reply_text(
-            "🛒 *Store Categories*\n\nSelect a category:",
+            text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -263,49 +272,43 @@ async def browse_store_category(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
-    category = query.data.split("_", 2)[2]
-    user_id = query.from_user.id
-    
     try:
-        products = execute_query("""
-            SELECT product_id, name, description, mrp, discount_percent, final_price, stock
-            FROM store_products
-            WHERE status = 'active' AND category = %s AND stock > 0
+        items = execute_query("""
+            SELECT serial, name, hsn, mrp, gst
+            FROM store_items
             ORDER BY name
-        """, (category,))
-        
-        if not products:
-            await query.message.reply_text(f"📭 No products in {category}.")
+        """)
+
+        if not items:
+            await query.message.reply_text("📭 No items available.")
             return BROWSE_STORE
-        
-        text = f"🛒 *{category}*\n\n"
+
+        text = "🛒 *Store Items*\n\n"
         keyboard = []
-        
-        for product in products:
-            discount_str = f" (-{product['discount_percent']}%)" if product['discount_percent'] > 0 else ""
+
+        for item in items:
             text += (
-                f"**{product['name']}**\n"
-                f"MRP: Rs {product['mrp']}{discount_str}\n"
-                f"💵 **Rs {product['final_price']}**\n"
-                f"📝 {product['description'][:100] or 'Quality product'}\n"
-                f"📦 Stock: {product['stock']}\n\n"
+                f"**{item['name']}**\n"
+                f"MRP: Rs {item['mrp']}\n"
+                f"GST: {item['gst']}%\n"
+                f"HSN: {item['hsn']}\n\n"
             )
             keyboard.append([
                 InlineKeyboardButton(
-                    f"Add to Cart - Rs {product['final_price']}", 
-                    callback_data=f"add_product_{product['product_id']}"
+                    f"Add to Cart - Rs {item['mrp']}",
+                    callback_data=f"add_product_{item['serial']}"
                 )
             ])
-        
+
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cmd_browse_store")])
-        
+
         await query.message.reply_text(
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.error(f"Error browsing category {category}: {e}")
+        logger.error(f"Error browsing items: {e}")
         await query.message.reply_text(f"❌ Error: {e}")
     
     return SELECT_PRODUCT
@@ -326,17 +329,17 @@ async def process_product_order(update: Update, context: ContextTypes.DEFAULT_TY
         if data.startswith("add_product_"):
             product_id = int(data.split("_")[-1])
             product = execute_query(
-                "SELECT * FROM store_products WHERE product_id = %s",
+                "SELECT serial, name, hsn, mrp, gst FROM store_items WHERE serial = %s",
                 (product_id,),
                 fetch_one=True
             )
             if not product:
                 await query.message.reply_text("❌ Product not found.")
                 return
-            
-            amount = float(product['final_price'])
+
+            amount = float(product['mrp'])
             product_name = product['name']
-            ar_enabled = product.get('ar_enabled', False)
+            ar_enabled = False
             
             # Create order record
             order_result = execute_query(

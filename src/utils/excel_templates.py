@@ -36,7 +36,7 @@ def generate_store_product_template() -> BytesIO:
         )
         
         # Headers
-        headers = ["Product Name", "Description", "MRP", "Percentage Discount", "Final Price"]
+        headers = ["Item Name", "HSN", "MRP", "GST %"]
         ws.append(headers)
         
         # Style header row
@@ -47,17 +47,16 @@ def generate_store_product_template() -> BytesIO:
             cell.border = border
         
         # Set column widths
-        ws.column_dimensions['A'].width = 25
-        ws.column_dimensions['B'].width = 40
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 18
         ws.column_dimensions['C'].width = 12
-        ws.column_dimensions['D'].width = 18
-        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['D'].width = 10
         
         # Add example rows
         examples = [
-            ["Protein Powder", "Whey protein isolate 2kg", 2500, 10, 2250],
-            ["Energy Bar", "High protein energy bars pack of 12", 800, 5, 760],
-            ["Gym Towel", "Premium microfiber gym towel", 500, 0, 500],
+            ["Formula 1 Shake", "2106", 1500, 18],
+            ["Aloe Concentrate", "2202", 1750, 18],
+            ["Afresh Energy Drink", "2106", 750, 18],
         ]
         
         center_align = Alignment(horizontal="center", vertical="center")
@@ -71,20 +70,18 @@ def generate_store_product_template() -> BytesIO:
         # Add instructions sheet
         instructions_ws = wb.create_sheet("Instructions")
         instructions = [
-            ["Store Product Bulk Upload Instructions"],
+            ["Store Items Bulk Upload Instructions"],
             [],
             ["Column Details:"],
-            ["Product Name:", "Name of the product (required, max 255 characters)"],
-            ["Description:", "Brief description of product (optional, max 1000 characters)"],
+            ["Item Name:", "Name of the item (required, max 255 characters)"],
+            ["HSN:", "HSN code (required, text)"],
             ["MRP:", "Maximum Retail Price in Rs (required, numeric)"],
-            ["Percentage Discount:", "Discount percentage 0-100 (optional, default 0)"],
-            ["Final Price:", "Will be auto-calculated as MRP × (1 - Discount%)"],
+            ["GST %:", "GST percentage (optional, default 18)"],
             [],
             ["Important:"],
             ["- Do NOT modify the header row", ""],
-            ["- Keep product names unique within the upload", ""],
-            ["- Final Price will be calculated automatically", ""],
-            ["- Use numeric values only for price and discount fields", ""],
+            ["- Keep Item Name + HSN unique", ""],
+            ["- Use numeric values only for MRP and GST", ""],
             ["- Save file as .xlsx format before uploading", ""],
         ]
         

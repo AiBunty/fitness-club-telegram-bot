@@ -1,5 +1,7 @@
 """
 Invoice v2 - Store Item Management with Serial Numbers
+DEPRECATED: This module uses JSON files. Use src.database.store_items_operations for database-backed operations instead.
+Legacy fallback only - do not use in new code.
 """
 import json
 import os

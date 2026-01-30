@@ -100,7 +100,7 @@ async def store_select_category(update: Update, context: ContextTypes.DEFAULT_TY
         return SELECTING_CATEGORY
     
     # Show first product
-    context.user_data['store_products'] = products
+    context.user_data['store_items'] = products
     context.user_data['store_category'] = category
     context.user_data['store_product_index'] = 0
     
@@ -110,7 +110,7 @@ async def store_select_category(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def _show_product(query_or_message, context: ContextTypes.DEFAULT_TYPE, index: int):
     """Display a product with add to cart button"""
-    products = context.user_data.get('store_products', [])
+    products = context.user_data.get('store_items', [])
     
     if index >= len(products):
         index = len(products) - 1
@@ -119,25 +119,27 @@ async def _show_product(query_or_message, context: ContextTypes.DEFAULT_TYPE, in
     context.user_data['store_product_index'] = index
     
     discounted_price = product['price'] * (1 - product['discount_percent'] / 100)
+    gst_percent = product.get('gst_percent', 18)
     
     text = (
         f"🛍️ *{product['name']}*\n\n"
         f"📝 {product['description']}\n\n"
-        f"💰 Price: ₹{product['price']:.2f}"
+        f"💰 Price: ₹{product['price']:.2f} | GST: {gst_percent}%"
     )
     
     if product['discount_percent'] > 0:
         text += f" → *₹{discounted_price:.2f}* (-{product['discount_percent']}%)"
     
-    text += f"\n\n📦 Stock: {product['stock']} available"
-    
-    if product['stock'] <= 0:
-        text += " ⛔ Out of stock"
+    stock = product.get('stock', None)
+    if stock is not None and stock != 9999:
+        text += f"\n\n📦 Stock: {stock} available"
+        if stock <= 0:
+            text += " ⛔ Out of stock"
     
     keyboard = []
     
     # Add to cart button (if in stock)
-    if product['stock'] > 0:
+    if product.get('stock', 1) > 0:
         keyboard.append([
             InlineKeyboardButton("➕ Add to Cart (1)", callback_data=f"store_add:{product['product_id']}:1")
         ])
