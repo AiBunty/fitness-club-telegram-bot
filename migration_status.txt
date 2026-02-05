@@ -1,0 +1,5 @@
+Added telegram_id column
+Backfilled telegram_id rows: 5
+Added unique index on telegram_id
+telegram_id NULL count: 0
+total users: 5

@@ -119,6 +119,39 @@ def get_manage_users_page(
 
 logger = logging.getLogger(__name__)
 
+
+def get_user_by_username(username: str):
+    """Get user by exact telegram_username."""
+    if not username:
+        return None
+    result = execute_query(
+        "SELECT * FROM users WHERE telegram_username = %s LIMIT 1",
+        (username,),
+        fetch_one=True
+    )
+    return result
+
+
+def update_user_telegram_id(user_id: int, telegram_id: int, telegram_username: str = None) -> bool:
+    """Update telegram_id for an existing user record."""
+    if not user_id or not telegram_id:
+        return False
+    try:
+        if telegram_username:
+            execute_query(
+                "UPDATE users SET telegram_id = %s, telegram_username = %s WHERE user_id = %s",
+                (telegram_id, telegram_username, user_id)
+            )
+        else:
+            execute_query(
+                "UPDATE users SET telegram_id = %s WHERE user_id = %s",
+                (telegram_id, user_id)
+            )
+        return True
+    except Exception as e:
+        logger.warning(f"[USER_OPS] update_user_telegram_id failed user_id={user_id} error={e}")
+        return False
+
 def user_exists(user_id: int) -> bool:
     result = execute_query(
         "SELECT COUNT(*) as count FROM users WHERE user_id = %s",
@@ -194,7 +227,11 @@ def get_user(user_id: int):
 get_user_by_id = get_user
 
 def get_all_users():
-    """Get all registered users"""
+    """Get all registered users
+    
+    Returns users with user_id (which IS the Telegram ID).
+    No separate telegram_id column exists in schema.
+    """
     query = """
         SELECT user_id, telegram_username, full_name, phone, age, 
                role, created_at, fee_status

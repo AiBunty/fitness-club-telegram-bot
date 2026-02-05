@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{invoiceTitle}}</title>
+    <style>
+      {{{styles}}}
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <div class="brand">
+          {{#if logoUrl}}
+          <img class="logo" src="{{logoUrl}}" alt="Logo" />
+          {{/if}}
+          <div>
+            <div class="business-name">{{business.name}}</div>
+            <div class="business-details">{{business.address}}</div>
+            <div class="business-details">Mobile: {{business.phone}}</div>
+            {{#if business.email}}
+            <div class="business-details">Email: {{business.email}}</div>
+            {{/if}}
+            {{#if business.website}}
+            <div class="business-details">Website: {{business.website}}</div>
+            {{/if}}
+            {{#if business.gstin}}
+            <div class="business-details">GSTIN: {{business.gstin}}</div>
+            {{/if}}
+          </div>
+        </div>
+        <div class="invoice-title">
+          <div class="label">{{invoiceTitle}}</div>
+          <div class="meta">Invoice No: {{invoice.invoiceId}}</div>
+          <div class="meta">Invoice Date: {{invoice.invoiceDate}}</div>
+        </div>
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-card">
+          <div class="title">Invoice Date</div>
+          <div class="value">{{invoice.invoiceDate}}</div>
+        </div>
+        <div class="meta-card">
+          <div class="title">Due Date</div>
+          <div class="value">{{invoice.dueDate}}</div>
+        </div>
+        <div class="meta-card">
+          <div class="title">Place of Supply</div>
+          <div class="value">{{invoice.placeOfSupply}}</div>
+        </div>
+        <div class="meta-card">
+          <div class="title">Status</div>
+          <div class="value">
+            {{#if invoice.status}}
+              <span class="badge {{statusClass}}">{{invoice.status}}</span>
+            {{else}}
+              <span class="badge">N/A</span>
+            {{/if}}
+          </div>
+        </div>
+      </div>
+
+      <div class="bill-to">
+        <div class="bill-card">
+          <div class="section-title">Bill To</div>
+          <div><strong>{{customer.name}}</strong></div>
+          <div>Telegram: {{customer.telegramUsername}}</div>
+          <div>User ID: {{customer.telegramUserId}}</div>
+          {{#if customer.address}}
+          <div>Address: {{customer.address}}</div>
+          {{/if}}
+        </div>
+        <div class="bill-card">
+          <div class="section-title">Invoice Summary</div>
+          <div>Subtotal: {{summary.subtotal}}</div>
+          {{#if summary.discountTotal}}
+          <div>Discount Total: {{summary.discountTotal}}</div>
+          {{/if}}
+          {{#if summary.shipping}}
+          <div>Shipping/Service: {{summary.shipping}}</div>
+          {{/if}}
+          <div>GST Total: {{summary.gstTotal}}</div>
+          {{#if summary.roundOff}}
+          <div>Round Off: {{summary.roundOff}}</div>
+          {{/if}}
+          <div><strong>Grand Total: {{summary.grandTotal}}</strong></div>
+        </div>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th class="text-center">Sr</th>
+            <th>Description</th>
+            <th class="text-center">Qty</th>
+            <th class="text-right">Rate</th>
+            <th class="text-right">Discount %</th>
+            <th class="text-right">Taxable</th>
+            <th class="text-right">GST %</th>
+            <th class="text-right">GST Amt</th>
+            <th class="text-right">Line Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each items}}
+          <tr>
+            <td class="text-center">{{this.sr}}</td>
+            <td>{{this.description}}</td>
+            <td class="text-center">{{this.qty}}</td>
+            <td class="text-right">{{this.rateFormatted}}</td>
+            <td class="text-right">{{this.discountPercent}}%</td>
+            <td class="text-right">{{this.taxableFormatted}}</td>
+            <td class="text-right">{{this.gstPercent}}%</td>
+            <td class="text-right">{{this.gstAmountFormatted}}</td>
+            <td class="text-right">{{this.lineTotalFormatted}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      <div class="summary">
+        <div>
+          <div class="payment">
+            <div class="section-title">Payment Details</div>
+            {{#if payment.upiId}}<div>UPI ID: {{payment.upiId}}</div>{{/if}}
+            {{#if payment.bankName}}<div>Bank: {{payment.bankName}}</div>{{/if}}
+            {{#if payment.accountNo}}<div>Account No: {{payment.accountNo}}</div>{{/if}}
+            {{#if payment.ifsc}}<div>IFSC: {{payment.ifsc}}</div>{{/if}}
+            {{#if payment.razorpayLink}}<div>Pay Link: {{payment.razorpayLink}}</div>{{/if}}
+            {{#unless hasPaymentDetails}}
+              <div>No payment details provided.</div>
+            {{/unless}}
+          </div>
+
+          <div class="terms">
+            <div class="section-title">Terms & Conditions</div>
+            <ul>
+              {{#each terms}}
+              <li>{{this}}</li>
+              {{/each}}
+            </ul>
+          </div>
+        </div>
+
+        <div class="summary-card">
+          <div class="summary-row">
+            <span>Subtotal</span>
+            <span>{{summary.subtotal}}</span>
+          </div>
+          {{#if summary.discountTotal}}
+          <div class="summary-row">
+            <span>Discount Total</span>
+            <span>{{summary.discountTotal}}</span>
+          </div>
+          {{/if}}
+          {{#if summary.shipping}}
+          <div class="summary-row">
+            <span>Shipping/Service Charges</span>
+            <span>{{summary.shipping}}</span>
+          </div>
+          {{/if}}
+          <div class="summary-row">
+            <span>GST Total</span>
+            <span>{{summary.gstTotal}}</span>
+          </div>
+          {{#if summary.roundOff}}
+          <div class="summary-row">
+            <span>Round Off</span>
+            <span>{{summary.roundOff}}</span>
+          </div>
+          {{/if}}
+          <div class="summary-row total">
+            <span>Grand Total</span>
+            <span>{{summary.grandTotal}}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Thank you for your business. For support contact: {{business.phone}}</div>
+        <div>Generated on: {{generatedOn}}</div>
+      </div>
+    </div>
+  </body>
+</html>

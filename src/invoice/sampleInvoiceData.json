@@ -1,0 +1,66 @@
+{
+  "business": {
+    "name": "Wani's Club Level Up",
+    "address": "101, 1st floor, Padma Vishwa Orchid, Cricket Ground, opposite Doctor BS Moonje Marg, above Pepperfry Showroom, Mahatma Nagar, Parijat Nagar, Nashik, Maharashtra 422005",
+    "phone": "09158243377",
+    "email": "support@wanisclublevelup.com",
+    "website": "https://wanisclublevelup.com",
+    "gstin": "27ABCDE1234F1Z5",
+    "logoUrl": "https://scontent-sin11-1.xx.fbcdn.net/v/t39.30808-6/581796178_856849056684939_633268110531278084_n.jpg?_nc_cat=104&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=e3yjwr7CT24Q7kNvwG8xlLB&_nc_oc=Adnub4AL_OZeBoynqaGVd3zKXXqRPvVGV1Ni1CWDsVl7U95LCALwNzaU_CUnV7lEb-8&_nc_zt=23&_nc_ht=scontent-sin11-1.xx&_nc_gid=OOY39Sr1uRYdO5VNOzyhWw&oh=00_Afu6unQqOnTRS8yDIIleIJM121FWMGraxkS59RUUSSn-7g&oe=698A2AC0"
+  },
+  "customer": {
+    "name": "Sayali Sunil Wani",
+    "telegramUsername": "@sayaliwani09",
+    "telegramUserId": "6133468540",
+    "address": "Nashik, Maharashtra"
+  },
+  "invoice": {
+    "invoiceId": "WCL-INV-2026-0001",
+    "invoiceDate": "2026-02-05",
+    "dueDate": "2026-02-12",
+    "currency": "INR",
+    "status": "UNPAID",
+    "placeOfSupply": "Maharashtra"
+  },
+  "items": [
+    {
+      "description": "Monthly Membership - Gold Plan",
+      "qty": 1,
+      "rate": 2999,
+      "discountPercent": 10,
+      "gstPercent": 18
+    },
+    {
+      "description": "Personal Training Session (2x)",
+      "qty": 2,
+      "rate": 850,
+      "discountPercent": 0,
+      "gstPercent": 18
+    }
+  ],
+  "charges": {
+    "shipping": 0,
+    "serviceCharge": 99
+  },
+  "payment": {
+    "upiId": "wani.club@upi",
+    "bankName": "HDFC Bank",
+    "accountNo": "123456789012",
+    "ifsc": "HDFC0001234",
+    "razorpayLink": "https://rzp.io/l/wanisclub"
+  },
+  "receipt": {
+    "receiptId": "RCPT-2026-0001",
+    "receiptDate": "2026-02-05",
+    "paymentMethod": "UPI",
+    "transactionId": "UPI-839201",
+    "amountPaid": 5289.94,
+    "paymentNotes": "Payment received via UPI."
+  },
+  "terms": [
+    "Payment due within 7 days.",
+    "This is a system-generated invoice; signature not required.",
+    "Disputes subject to Nashik jurisdiction.",
+    "Returns/refunds are subject to prior approval and policy conditions."
+  ]
+}

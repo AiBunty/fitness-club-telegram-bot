@@ -8,6 +8,7 @@ Callbacks use the prefix "inv_manage_" to prevent conflicts with existing
 import json
 import os
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -220,8 +221,60 @@ def _clear_inv_manage_context(context: ContextTypes.DEFAULT_TYPE) -> None:
 def _resolve_telegram_user_id(invoice: Dict) -> Optional[int]:
     if not invoice:
         return None
-    for key in ("user_id", "telegram_id"):
-        value = invoice.get(key)
+
+    direct = _resolve_telegram_user_id_from_record(invoice)
+    if direct:
+        return direct
+
+    username = _extract_username(invoice.get("user_name", ""))
+    if not username:
+        return None
+
+    try:
+        from src.invoices_v2.utils import search_users
+        matches = search_users(username, limit=5) or []
+        username_lower = username.lower()
+        for match in matches:
+            match_username = (match.get("username") or "").lstrip("@").lower()
+            if match_username == username_lower:
+                resolved = _resolve_telegram_user_id_from_record(match)
+                if resolved:
+                    invoice_id = invoice.get("invoice_id")
+                    if invoice_id:
+                        _update_invoice_telegram_id(invoice_id, resolved)
+                    logger.info(
+                        f"[INVOICE_MANAGE] resolved telegram_id via username invoice_id={invoice_id} telegram_id={resolved}"
+                    )
+                    return resolved
+
+        if len(matches) == 1:
+            resolved = _resolve_telegram_user_id_from_record(matches[0])
+            if resolved:
+                invoice_id = invoice.get("invoice_id")
+                if invoice_id:
+                    _update_invoice_telegram_id(invoice_id, resolved)
+                logger.info(
+                    f"[INVOICE_MANAGE] resolved telegram_id via single match invoice_id={invoice_id} telegram_id={resolved}"
+                )
+                return resolved
+    except Exception as e:
+        logger.warning(f"[INVOICE_MANAGE] telegram_id lookup failed: {e}")
+
+    return None
+
+
+def _extract_username(user_name: str) -> Optional[str]:
+    if not user_name:
+        return None
+    match = re.search(r"@([A-Za-z0-9_]{3,})", user_name)
+    return match.group(1) if match else None
+
+
+def _resolve_telegram_user_id_from_record(record: Dict) -> Optional[int]:
+    if not record:
+        return None
+    for key in ("telegram_id", "user_id"):
+        value = record.get(key)
         if value is None:
             continue
         try:
@@ -231,6 +284,18 @@ def _resolve_telegram_user_id(invoice: Dict) -> Optional[int]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _update_invoice_telegram_id(invoice_id: str, telegram_id: int) -> None:
+    invoices = load_invoices()
+    updated = False
+    for inv in invoices:
+        if str(inv.get("invoice_id", "")).upper() == invoice_id.upper():
+            inv["telegram_id"] = telegram_id
+            updated = True
+            break
+    if updated:
+        save_invoices(invoices)
 
 
 async def show_invoice_main_menu(
@@ -440,15 +505,32 @@ async def handle_manage_resend_invoice(update: Update, context: ContextTypes.DEF
         "final_total": invoice.get("final_total", 0),
     })
 
+    # Create inline buttons for user actions
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    user_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Pay Bill", callback_data=f"inv2_pay_{invoice_id}")],
+        [InlineKeyboardButton("❌ Reject Bill", callback_data=f"inv2_reject_{invoice_id}")]
+    ])
+
     try:
         await context.bot.send_document(
             chat_id=user_id,
             document=InputFile(pdf_buffer, filename=f"invoice_{invoice_id}.pdf"),
             caption=f"✅ Invoice {invoice_id} (Resent)",
+            reply_markup=user_kb,
         )
         await query.edit_message_text(f"✅ Invoice {invoice_id} resent to user.")
     except Exception as e:
-        await query.edit_message_text(f"❌ Failed to resend: {e}")
+        logger.error(f"[INVOICE_MANAGE] resend_failed invoice_id={invoice_id} user_id={user_id} error={e}")
+        error_text = str(e)
+        if "Chat not found" in error_text:
+            await query.edit_message_text(
+                "❌ Failed to resend: Chat not found.\n"
+                "User likely hasn’t started the bot or the Telegram ID is invalid. "
+                "Ask them to /start, then retry."
+            )
+        else:
+            await query.edit_message_text(f"❌ Failed to resend: {e}")
 
     return InvoiceV2State.MANAGE_MENU
 

@@ -642,7 +642,7 @@ def main(start: bool = False):
         pattern="^(?!pay_method|admin_approve|admin_reject|sub_|admin_sub_|edit_weight|cancel|cmd_invoices|inv_|inv2_|manage_|admin_invoice)"
     ))
     logger.info("[BOT] ✅ Generic callback handler registered (LAST - with exclusions)")
-    application.add_handler(CallbackQueryHandler(handle_analytics_callback))
+    # REMOVED: handle_analytics_callback (redundant catch-all that intercepted conversation handlers)
     application.add_handler(CallbackQueryHandler(callback_view_notification, pattern="^notif_"))
     application.add_handler(CallbackQueryHandler(callback_delete_notification, pattern="^delete_notif_"))
     application.add_handler(CallbackQueryHandler(callback_mark_all_read, pattern="^mark_all_read$"))
@@ -739,6 +739,19 @@ def main(start: bool = False):
         name="habits_reminder_evening"
     )
     logger.info("Scheduled evening habits reminder at 8:00 PM")
+    
+    # Invoice V2 24-hour payment reminders (runs every hour)
+    try:
+        from src.utils.scheduled_jobs import send_invoice_v2_24h_reminders
+        job_queue.run_repeating(
+            send_invoice_v2_24h_reminders,
+            interval=3600,  # Every hour (3600 seconds)
+            first=60,  # Start 1 minute after bot launch
+            name="invoice_v2_24h_reminders"
+        )
+        logger.info("Scheduled Invoice V2 24-hour reminders (hourly)")
+    except Exception as e:
+        logger.error(f"Failed to schedule Invoice V2 reminders: {e}")
     
     # Shake credit payment reminders every day at 11 AM
     job_queue.run_daily(

@@ -69,9 +69,11 @@ def search_users(query: str, limit: int = 10) -> List[Dict]:
                 # Parse full_name into first/last for compatibility
                 full_name = u.get('full_name', '')
                 name_parts = full_name.split(' ', 1)
+                user_id = u.get('user_id')  # user_id IS the Telegram ID
+                
                 formatted_users.append({
-                    'telegram_id': u.get('user_id'),
-                    'user_id': u.get('user_id'),
+                    'telegram_id': user_id,  # For backward compatibility in code
+                    'user_id': user_id,       # Primary field
                     'first_name': name_parts[0] if name_parts else '',
                     'last_name': name_parts[1] if len(name_parts) > 1 else '',
                     'full_name': full_name,

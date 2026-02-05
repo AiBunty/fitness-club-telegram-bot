@@ -15,6 +15,8 @@ if USE_LOCAL_DB:
         get_user as db_get_user,
         create_user as db_create_user,
         is_user_banned as db_is_user_banned,
+        get_user_by_username as db_get_user_by_username,
+        update_user_telegram_id as db_update_user_telegram_id,
     )
 
     def user_exists(user_id: int) -> bool:
@@ -32,8 +34,21 @@ if USE_LOCAL_DB:
             return db_is_user_banned(user_id)
         except Exception:
             return False
+
+    def get_user_by_username(username: str):
+        return db_get_user_by_username(username)
+
+    def update_user_telegram_id(user_id: int, telegram_id: int, telegram_username: str = None) -> bool:
+        return db_update_user_telegram_id(user_id, telegram_id, telegram_username)
 else:
-    from src.database.user_operations import user_exists, create_user, get_user, is_user_banned
+    from src.database.user_operations import (
+        user_exists,
+        create_user,
+        get_user,
+        is_user_banned,
+        get_user_by_username,
+        update_user_telegram_id,
+    )
 from src.database.attendance_operations import (
     create_attendance_request, get_user_attendance_today, approve_attendance
 )
@@ -87,6 +102,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user = get_user(telegram_id)
     except Exception as e:
         logger.debug(f"[WELCOME] get_user failed for {telegram_id}: {e}")
+
+    # ---------- NEW USER / USERNAME RESOLVE ----------
+    if db_user is None:
+        username = user.username or ""
+        if username:
+            try:
+                matched = get_user_by_username(username)
+                if matched:
+                    updated = update_user_telegram_id(
+                        matched.get("user_id"),
+                        telegram_id,
+                        username
+                    )
+                    if updated:
+                        matched["telegram_id"] = telegram_id
+                        db_user = matched
+                        logger.info(
+                            f"[WELCOME] username_match_updated telegram_id={telegram_id} username={username}"
+                        )
+            except Exception as e:
+                logger.debug(f"[WELCOME] username match failed for {username}: {e}")
 
     # ---------- NEW USER ----------
     if db_user is None:

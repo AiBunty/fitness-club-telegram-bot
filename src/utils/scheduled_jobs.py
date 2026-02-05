@@ -548,6 +548,121 @@ async def send_habits_reminder_evening(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error sending habits reminders: {e}")
 
+async def send_invoice_v2_24h_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send payment reminders for invoices older than 24 hours
+    Runs every hour
+    Checks for pending invoices and sends reminders to users with action buttons
+    """
+    try:
+        logger.info("Checking for overdue Invoice V2 payments...")
+        
+        from src.invoices_v2.handlers import load_invoices, save_invoices
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        from datetime import timedelta
+        
+        # Load all invoices from JSON
+        invoices = load_invoices()
+        
+        if not invoices:
+            logger.info("No invoices found for reminder check")
+            return
+        
+        now = datetime.now()
+        sent_count = 0
+        
+        for invoice in invoices:
+            try:
+                invoice_id = invoice.get('invoice_id')
+                user_id = invoice.get('user_id')
+                payment_status = invoice.get('payment_status', 'pending')
+                created_at_str = invoice.get('created_at')
+                
+                # Skip if already paid or rejected
+                if payment_status in ['paid', 'rejected']:
+                    continue
+                
+                # Parse created_at timestamp
+                if not created_at_str:
+                    continue
+                
+                try:
+                    created_at = datetime.fromisoformat(created_at_str)
+                except ValueError:
+                    logger.warning(f"Invalid created_at format for invoice {invoice_id}")
+                    continue
+                
+                # Check if invoice is at least 24 hours old
+                age = now - created_at
+                if age < timedelta(hours=24):
+                    continue
+                
+                # Check last reminder time to avoid spam (at least 1 hour between reminders)
+                last_reminder_at = invoice.get('last_reminder_at')
+                if last_reminder_at:
+                    try:
+                        last_reminder = datetime.fromisoformat(last_reminder_at)
+                        if now - last_reminder < timedelta(hours=1):
+                            continue
+                    except ValueError:
+                        pass
+                
+                # Check reminder count (max 3 reminders)
+                reminder_count = invoice.get('reminder_count', 0)
+                if reminder_count >= 3:
+                    logger.info(f"Skipping invoice {invoice_id} - max reminders sent")
+                    continue
+                
+                # Create reminder message with action buttons
+                user_name = invoice.get('user_name', 'User')
+                final_total = invoice.get('final_total', 0)
+                
+                reminder_text = f"""
+📋 *Invoice Payment Reminder*
+
+Invoice ID: {invoice_id}
+Amount: ₹{final_total}
+Status: Pending Payment
+
+Please review and take action on this invoice.
+"""
+                
+                # Create inline buttons for immediate action
+                user_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Pay Bill", callback_data=f"inv2_pay_{invoice_id}")],
+                    [InlineKeyboardButton("❌ Reject Bill", callback_data=f"inv2_reject_{invoice_id}")]
+                ])
+                
+                # Send reminder
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=reminder_text,
+                    reply_markup=user_kb,
+                    parse_mode="Markdown"
+                )
+                
+                # Update invoice reminder tracking
+                invoice['last_reminder_at'] = now.isoformat()
+                invoice['reminder_count'] = reminder_count + 1
+                
+                sent_count += 1
+                logger.info(f"[INVOICE_V2] reminder_sent invoice_id={invoice_id} user_id={user_id} count={invoice['reminder_count']}")
+                
+            except Exception as e:
+                logger.error(f"[INVOICE_V2] reminder_failed invoice_id={invoice.get('invoice_id')} error={e}")
+                continue
+        
+        # Save updated invoices back to JSON
+        if sent_count > 0:
+            save_invoices(invoices)
+            logger.info(f"Invoice V2 reminders sent to {sent_count} users")
+        else:
+            logger.info("No Invoice V2 reminders needed at this time")
+    
+    except Exception as e:
+        logger.error(f"Error sending Invoice V2 reminders: {e}")
+
+
 async def send_shake_credit_reminders(context: ContextTypes.DEFAULT_TYPE):
     """
     Send payment reminders for shake orders on credit terms

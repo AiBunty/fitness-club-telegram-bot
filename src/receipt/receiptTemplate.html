@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Receipt</title>
+    <style>
+      {{{styles}}}
+    </style>
+  </head>
+  <body>
+    <div class="watermark">PAID</div>
+    <div class="content">
+      <div class="page">
+        <div class="header">
+          <div class="brand">
+            {{#if logoUrl}}
+            <img class="logo" src="{{logoUrl}}" alt="Logo" />
+            {{/if}}
+            <div>
+              <div class="business-name">{{business.name}}</div>
+              <div class="business-details">{{business.address}}</div>
+              <div class="business-details">Mobile: {{business.phone}}</div>
+              {{#if business.email}}
+              <div class="business-details">Email: {{business.email}}</div>
+              {{/if}}
+              {{#if business.website}}
+              <div class="business-details">Website: {{business.website}}</div>
+              {{/if}}
+              {{#if business.gstin}}
+              <div class="business-details">GSTIN: {{business.gstin}}</div>
+              {{/if}}
+            </div>
+          </div>
+          <div class="receipt-title">
+            <div class="label">PAYMENT RECEIPT</div>
+            <div class="meta">Receipt No: {{receipt.receiptId}}</div>
+            <div class="meta">Receipt Date: {{receipt.receiptDate}}</div>
+          </div>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta-card">
+            <div class="title">Payment Status</div>
+            <div class="value"><span class="badge">PAID</span></div>
+          </div>
+          <div class="meta-card">
+            <div class="title">Payment Method</div>
+            <div class="value">{{receipt.paymentMethod}}</div>
+          </div>
+          <div class="meta-card">
+            <div class="title">Transaction ID</div>
+            <div class="value">{{receipt.transactionId}}</div>
+          </div>
+          <div class="meta-card">
+            <div class="title">Original Invoice No</div>
+            <div class="value">{{invoice.invoiceId}}</div>
+          </div>
+        </div>
+
+        <div class="received-from">
+          <div class="info-card">
+            <div class="section-title">Received From</div>
+            <div><strong>{{customer.name}}</strong></div>
+            <div>Telegram: {{customer.telegramUsername}}</div>
+            <div>User ID: {{customer.telegramUserId}}</div>
+          </div>
+          <div class="info-card">
+            <div class="section-title">Receipt Summary</div>
+            <div>Total Amount: {{summary.grandTotal}}</div>
+            <div>Amount Paid: {{summary.amountPaid}}</div>
+            <div><strong>Balance Due: {{summary.balanceDue}}</strong></div>
+          </div>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th class="text-right">Amount Paid</th>
+              <th class="text-center">GST</th>
+              <th class="text-right">Balance Due</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Payment for Invoice {{invoice.invoiceId}}</td>
+              <td class="text-right">{{summary.amountPaid}}</td>
+              <td class="text-center">{{summary.gstInfo}}</td>
+              <td class="text-right">{{summary.balanceDue}}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="summary">
+          <div>
+            {{#if receipt.paymentNotes}}
+            <div class="notes">
+              <div class="section-title">Notes</div>
+              <div>{{receipt.paymentNotes}}</div>
+            </div>
+            {{/if}}
+
+            <div class="terms">
+              <div class="section-title">Terms</div>
+              <ul>
+                {{#each terms}}
+                <li>{{this}}</li>
+                {{/each}}
+              </ul>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-row">
+              <span>Total Amount</span>
+              <span>{{summary.grandTotal}}</span>
+            </div>
+            <div class="summary-row">
+              <span>Amount Paid</span>
+              <span>{{summary.amountPaid}}</span>
+            </div>
+            <div class="summary-row total">
+              <span>Balance Due</span>
+              <span>{{summary.balanceDue}}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div>Thank you for your payment. For support contact: {{business.phone}}</div>
+          <div>Generated on: {{generatedOn}}</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

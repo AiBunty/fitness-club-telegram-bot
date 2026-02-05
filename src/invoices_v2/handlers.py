@@ -63,18 +63,37 @@ INVOICES_FILE = "data/invoices_v2.json"
 
 
 def _resolve_telegram_user_id(user: Optional[dict]) -> Optional[int]:
+    """Extract Telegram user ID from user dict.
+    
+    Database schema has user_id as PRIMARY KEY (which IS the Telegram ID).
+    Validates that the user_id is NOT a placeholder (>= 2147483647).
+    
+    Args:
+        user: User dict with 'user_id' field
+        
+    Returns:
+        int: User's Telegram ID, or None if not found/invalid/placeholder
+    """
     if not user:
         return None
-    for key in ("telegram_id", "user_id"):
-        value = user.get(key)
-        if value is None:
-            continue
-        try:
-            value_int = int(value)
-            if value_int > 0:
-                return value_int
-        except (TypeError, ValueError):
-            continue
+    
+    # Database has user_id (BIGINT) as the Telegram ID
+    user_id = user.get('user_id')
+    if user_id is None:
+        logger.warning(f"[INVOICE_V2] user dict missing user_id: {user}")
+        return None
+    
+    try:
+        user_id_int = int(user_id)
+        # Reject placeholder IDs (from database migration issues)
+        if user_id_int >= 2147483647:
+            logger.warning(f"[INVOICE_V2] rejecting placeholder user_id: {user_id}")
+            return None
+        if user_id_int > 0:
+            return user_id_int
+    except (TypeError, ValueError) as e:
+        logger.error(f"[INVOICE_V2] invalid user_id value: {user_id}, error: {e}")
+    
     return None
 
 
@@ -137,6 +156,9 @@ async def cmd_invoices_v2(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Entry point: Clear state, show invoice menu"""
     query = update.callback_query
     admin_id = query.from_user.id if query else update.effective_user.id
+    
+    # DIAGNOSTIC: Log entry immediately to confirm handler is reached
+    logger.info(f"[INVOICE_V2] ENTRY_HANDLER_REACHED admin={admin_id} callback_data={query.data if query else 'command'}")
     
     # CRITICAL: Answer callback immediately to stop Telegram loading spinner
     if query:
@@ -640,7 +662,7 @@ async def handle_send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not user_id:
         logger.error("[INVOICE_V2] failed_to_resolve_user_id selected_user=%s", selected_user)
         await query.edit_message_text(
-            "❌ Unable to resolve Telegram user ID. Please re-select the user and try again."
+            "❌ Unable to resolve user ID from selection. Please try selecting the user again."
         )
         clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
         return ConversationHandler.END
@@ -649,6 +671,7 @@ async def handle_send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Save invoice
     invoice_save_data = {
         "user_id": user_id,
+        "telegram_id": user_id,
         "user_name": user_name,
         "items": invoice_data["items"],
         "items_subtotal": invoice_data["items_subtotal"],
@@ -695,18 +718,23 @@ Actions:
     ])
     
     user_send_error = None
-    try:
-        await context.bot.send_document(
-            chat_id=user_id,
-            document=InputFile(pdf_buffer, filename=f"invoice_{invoice_id}.pdf"),
-            caption=user_text,
-            reply_markup=user_kb,
-            parse_mode="Markdown"
-        )
-        logger.info(f"[INVOICE_V2] invoice_sent_to_user invoice_id={invoice_id} user_id={user_id}")
-    except Exception as e:
-        user_send_error = str(e)
-        logger.error(f"[INVOICE_V2] failed_to_send_to_user invoice_id={invoice_id} error={e}")
+    # Validate telegram_id before attempting send
+    if user_id >= 2147483647:
+        user_send_error = "Invalid telegram_id (placeholder detected)"
+        logger.warning(f"[INVOICE_V2] skipped_send_invalid_telegram_id invoice_id={invoice_id} user_id={user_id}")
+    else:
+        try:
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=InputFile(pdf_buffer, filename=f"invoice_{invoice_id}.pdf"),
+                caption=user_text,
+                reply_markup=user_kb,
+                parse_mode="Markdown"
+            )
+            logger.info(f"[INVOICE_V2] invoice_sent_to_user invoice_id={invoice_id} user_id={user_id}")
+        except Exception as e:
+            user_send_error = str(e)
+            logger.error(f"[INVOICE_V2] failed_to_send_to_user invoice_id={invoice_id} error={e}")
     
     # Send copy to admin(s)
     admin_text = (
@@ -745,7 +773,16 @@ Actions:
             f"⚠️ Invoice {invoice_id} created, but failed to send to user. Admins received a copy.\nError: {user_send_error}"
         )
     else:
-        await query.edit_message_text(f"✅ Invoice {invoice_id} sent to user and all admins!")
+        success_msg = f"✅ Invoice {invoice_id} sent to user and all admins!"
+        if user_send_error and "Invalid telegram_id" in user_send_error:
+            # Extract username from invoice data if available
+            username_hint = ""
+            if invoice_data:
+                user_name = invoice_data.get("user_name", "")
+                if "@" in user_name:
+                    username_hint = f" ({user_name.split('@')[1].split(')')[0]})"
+            success_msg += f"\n\n💡 Tip: Ask the user{username_hint} to send /start to the bot, then use 🔁 Resend button."
+        await query.edit_message_text(success_msg)
     
     # CRITICAL: Clear invoice flow lock on successful completion
     clear_active_flow(admin_id, FLOW_INVOICE_V2_CREATE)
@@ -817,7 +854,17 @@ Please choose payment method:
         [InlineKeyboardButton("❌ Cancel", callback_data="pay_method_cancel")]
     ])
     
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        # Fallback: send new message if editing old message fails
+        logger.warning(f"[INVOICE_V2] edit_failed_on_old_message invoice_id={invoice_id} error={e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
 
 
 async def handle_reject_bill(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -846,7 +893,16 @@ async def handle_reject_bill(update: Update, context: ContextTypes.DEFAULT_TYPE)
     save_invoices(invoices)
     
     # Notify user
-    await query.edit_message_text(f"❌ Invoice {invoice_id} rejected.")
+    try:
+        await query.edit_message_text(f"❌ Invoice {invoice_id} rejected.")
+    except Exception as e:
+        # Fallback: send new message if editing old message fails
+        logger.warning(f"[INVOICE_V2] reject_edit_failed invoice_id={invoice_id} error={e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ Invoice {invoice_id} rejected.",
+            parse_mode="Markdown"
+        )
     
     # Notify admin(s)
     admin_id = invoice.get("created_by")

@@ -79,10 +79,10 @@ async def callback_invoice_report_monthly(update: Update, context: CallbackConte
     
     # Show month selection
     now = datetime.now()
-        keyboard = [
-            [InlineKeyboardButton("⬅️ Back to Reports", callback_data="cmd_invoice_reports")],
-            [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
-        ]
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to Reports", callback_data="cmd_invoice_reports")],
+        [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="cmd_admin_back")],
+    ]
     for i in range(12):
         d = datetime(now.year if i == 0 else now.year - 1, 
                      (now.month - i) if i < now.month else (12 + now.month - i), 1)
