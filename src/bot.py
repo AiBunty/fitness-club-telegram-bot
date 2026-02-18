@@ -183,16 +183,9 @@ def main(start: bool = False):
         show_role_menu
     )
     from src.handlers.callback_handlers import handle_callback_query
-    from src.handlers.debug_handlers import raw_update_logger
-    from src.handlers.activity_handlers import (
-        cmd_weight, get_weight_input, WEIGHT_VALUE,
-        cmd_water, get_water, WATER_CUPS,
-        cmd_meal, get_meal_photo, MEAL_PHOTO,
-        cmd_habits, get_habits_confirm, HABITS_CONFIRM,
-        cmd_checkin, get_checkin_method, get_checkin_photo, CHECKIN_METHOD, CHECKIN_PHOTO,
-        cancel_activity
-    )
-    from src.handlers.admin_handlers import (
+    from src.features.debug import debug_handler
+    from src.features.activity import activity_handler
+    from src.features.admin import (
         cmd_pending_attendance, cmd_pending_shakes,
         callback_review_attendance, callback_review_shakes,
         callback_approve_attend, callback_reject_attend,
@@ -238,7 +231,7 @@ def main(start: bool = False):
         callback_confirm_create, callback_cancel_create, callback_view_active_challenges,
         callback_payment_status, callback_challenge_stats, get_admin_challenge_handler
     )
-    from src.handlers.misc_handlers import cmd_whoami
+    from src.features.misc import misc_handler
     from src.handlers.broadcast_handlers import (
         get_broadcast_conversation_handler, cmd_followup_settings,
         view_broadcast_history, send_followup_to_inactive_users,
@@ -255,7 +248,7 @@ def main(start: bool = False):
         callback_report_eod, callback_export_active, callback_export_inactive,
         callback_report_export, callback_move_expired
     )
-    from src.handlers.subscription_handlers import (
+    from src.features.subscription import (
         cmd_subscribe, cmd_my_subscription, cmd_admin_subscriptions,
         callback_admin_approve_sub, callback_approve_sub_standard,
         callback_custom_amount, callback_select_end_date, callback_reject_sub,
@@ -269,7 +262,7 @@ def main(start: bool = False):
     from src.handlers.admin_settings_handlers import (
         cmd_admin_settings, get_admin_settings_handler
     )
-    from src.handlers.admin_welcome_handlers import get_welcome_message_admin_handler
+    from src.features.admin_welcome import admin_welcome_handler
     from src.handlers.invoice_report_handlers import (
         cmd_invoice_reports, get_invoice_report_conversation_handler, get_invoice_report_callbacks
     )
@@ -322,7 +315,14 @@ def main(start: bool = False):
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Build application with explicit job queue configuration for Python 3.13 compatibility
+    from telegram.ext import JobQueue
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .job_queue(JobQueue())
+        .build()
+    )
     logger.info("[APP] Telegram Application built successfully")
 
     # Register global command menu so Telegram shows command buttons.
@@ -355,7 +355,7 @@ def main(start: bool = False):
     application.add_handler(CommandHandler('menu', menu_command))
     application.add_handler(CommandHandler('roles', show_role_menu))
     application.add_handler(CommandHandler('qrcode', cmd_qrcode))
-    application.add_handler(CommandHandler('whoami', cmd_whoami))
+    application.add_handler(CommandHandler('whoami', misc_handler.cmd_whoami))
     # Location handler for geofenced studio QR check-in
     application.add_handler(MessageHandler(filters.LOCATION, handle_location_for_checkin))
     # Greeting handler: respond to Hi/Hello with personalized menu
@@ -541,11 +541,11 @@ def main(start: bool = False):
     application.add_handler(CommandHandler('my_subscription', cmd_my_subscription))
     application.add_handler(CommandHandler('admin_subscriptions', cmd_admin_subscriptions))
     application.add_handler(get_admin_settings_handler())
-    application.add_handler(get_welcome_message_admin_handler())
+    application.add_handler(admin_welcome_handler.get_welcome_message_admin_handler())
     application.add_handler(get_reminder_conversation_handler())
 
     # DEBUG: log raw incoming updates without blocking conversation handlers
-    application.add_handler(MessageHandler(filters.ALL, raw_update_logger), group=1)
+    application.add_handler(MessageHandler(filters.ALL, debug_handler.raw_update_logger), group=1)
     
     # ==================== SUBSCRIPTION & PAYMENT CALLBACKS ====================
 

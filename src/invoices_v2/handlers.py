@@ -28,7 +28,7 @@ from src.database.ar_operations import (
     update_receivable_status,
 )
 from src.utils.auth import is_admin
-from src.handlers.admin_handlers import get_admin_users
+from src.features.admin import get_admin_users
 from src.utils.flow_manager import (
     set_active_flow, clear_active_flow, check_flow_ownership,
     FLOW_INVOICE_V2_CREATE

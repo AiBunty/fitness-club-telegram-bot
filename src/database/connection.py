@@ -103,7 +103,9 @@ class DatabaseConnectionPool:
                     db_config['cursorclass'] = DictCursor
                     db_config['autocommit'] = False
                     db_config['charset'] = 'utf8mb4'
-                    db_config['connect_timeout'] = 10
+                    db_config['connect_timeout'] = 30
+                    db_config['read_timeout'] = 30
+                    db_config['write_timeout'] = 30
                     
                     logger.info(f"[DB] Attempting connection to {db_config.get('host')}:{db_config.get('port')}...")
                     # Create a simple pool structure

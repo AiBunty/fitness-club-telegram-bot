@@ -323,9 +323,9 @@ async def callback_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Route callback queries to appropriate handlers"""
     from src.handlers.user_handlers import cmd_qrcode, cmd_points_chart, cmd_studio_rules
-    from src.handlers.misc_handlers import cmd_whoami, cmd_get_telegram_id
-    from src.handlers.activity_handlers import cmd_weight, cmd_water, cmd_meal, cmd_habits, cmd_checkin, get_habits_confirm
-    from src.handlers.admin_handlers import (
+    from src.features.misc import misc_handler
+    from src.features.activity import activity_handler
+    from src.features.admin import (
         cmd_pending_attendance, cmd_pending_shakes, cmd_add_staff, cmd_remove_staff, 
         cmd_list_staff, cmd_add_admin, cmd_remove_admin, cmd_list_admins,
         cmd_list_users, cmd_delete_user, cmd_ban_user, cmd_unban_user
@@ -429,9 +429,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif query.data == "cmd_pending_shake_purchases":
         await cmd_admin_pending_purchases(update, context)
     elif query.data == "cmd_get_telegram_id":
-        await cmd_get_telegram_id(update, context)
+        await misc_handler.cmd_get_telegram_id(update, context)
     elif query.data == "cmd_whoami":
-        await cmd_whoami(update, context)
+        await misc_handler.cmd_whoami(update, context)
     elif query.data == "cmd_pending_attendance":
         if not await verify_admin_access(update, context):
             return
